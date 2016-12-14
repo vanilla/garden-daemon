@@ -1,0 +1,20 @@
+{
+    "name": "vanilla/garden-daemon",
+    "description": "A multi purpose forking daemon subsystem for long running PHP applications.",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Tim Gunter",
+            "email": "tim@vanillaforums.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.6",
+        "vanilla/garden-cli": "^1.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Garden\\Daemon\\": "src"
+        }
+    }
+}
