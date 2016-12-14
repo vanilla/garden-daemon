@@ -1,3 +1,8 @@
 /vendor/
-.idea/
+.project
+.settings
+.buildpath
+.idea/*
+.DS_Store
+Thumbs.db
 composer.lock
