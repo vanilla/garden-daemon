@@ -13,8 +13,12 @@ namespace Garden\Daemon;
  * @author Tim Gunter <tim@vanillaforums.com>
  * @package garden-daemon
  */
-interface App {
+interface AppInterface {
 
     public function run();
+
+    public function preflight();
+
+    public function commands(\Garden\Cli\Cli $cli);
 
 }

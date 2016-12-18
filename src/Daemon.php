@@ -7,6 +7,14 @@
 
 namespace Garden\Daemon;
 
+use Garden\Cli\Cli;
+use Garden\Container\Container;
+
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerAwareTrait;
+
+use Interop\Container\ContainerInterface;
+
 /**
  * Daemon manager
  *
@@ -20,7 +28,9 @@ namespace Garden\Daemon;
  * @author Tim Gunter <tim@vanillaforums.com>
  * @package garden-daemon
  */
-class Daemon {
+class Daemon implements ContainerInterface, LoggerAwareInterface {
+
+    use LoggerAwareTrait;
 
     const MODE_SINGLE = 'single';
     const MODE_FLEET = 'fleet';
@@ -58,7 +68,30 @@ class Daemon {
      * @var array
      */
     protected $runtimes;
-    public static $options = null;
+
+    /**
+     * Daemon options
+     * @var array
+     */
+    protected $options;
+
+    /**
+     * CLI
+     * @var \Garden\Cli\Cli
+     */
+    protected $cli;
+
+    /**
+     * DI Container
+     * @var \Garden\Container\Container
+     */
+    protected $di;
+
+    /**
+     * Lock manager
+     * @var Lock
+     */
+    protected $lock;
 
     protected $exitMode = 'success';
     protected $exit = 0;
@@ -80,7 +113,6 @@ class Daemon {
     /*
      * Logging output modifiers
      */
-    const LOG_O_NONEWLINE = 1;
     const LOG_O_SHOWTIME = 2;
     const LOG_O_SHOWPID = 4;
     const LOG_O_ECHO = 8;
@@ -88,12 +120,16 @@ class Daemon {
     public static $logFile = null;
     public static $logLevel = -1;
 
-    private function __construct() {
+    private function __construct(Cli $cli, Container $di, array $options) {
         $this->parentPid = posix_getpid();
         $this->daemonPid = null;
         $this->childPid = null;
         $this->children = [];
         $this->realm = 'console';
+
+        $this->cli = $cli;
+        $this->di = $di;
+        $this->options = $options;
 
         declare (ticks = 100);
 
@@ -109,8 +145,8 @@ class Daemon {
      *
      * @param array $options
      */
-    public static function configure($options) {
-        Daemon::$options = $options;
+    public function configure(array $options = []) {
+        $this->options = array_merge($this->options, $options);
     }
 
     /**
@@ -120,8 +156,8 @@ class Daemon {
      * @param mixed $default
      * @return mixed
      */
-    public static function option($option, $default = null) {
-        return val($option, Daemon::$options, $default);
+    public function get($option, $default = null) {
+        return $this->options[$option] ?? $default;
     }
 
     /**
@@ -131,8 +167,18 @@ class Daemon {
      * @param mixed $value
      * @return mixed
      */
-    public static function setoption($option, $value) {
-        return Daemon::$options[$option] = $value;
+    public function set($option, $value) {
+        return $this->options[$option] = $value;
+    }
+
+    /**
+     * Check if configuration option is set
+     *
+     * @param string $option
+     * @return boolean
+     */
+    public function has($option) {
+        return array_key_exists($option, $this->options);
     }
 
     /**
@@ -140,55 +186,52 @@ class Daemon {
      *
      * @return \Garden\Cli\Args
      */
-    public static function getArgs() {
-        return Daemon::option('args');
+    public function getArgs() {
+        return $this->get('args');
     }
 
     /**
-     * Execute Daemon
+     * Attach to process
      *
      * @param array $arguments
      * @return void
      * @throws DaemonException
      */
-    public static function start($arguments = null) {
-        if (is_null(Daemon::$options)) {
-            throw new Exception("Options not set.", 500);
+    public function attach($arguments = null) {
+
+        if (!$this->has('appname')) {
+            throw new Exception("Must set appname in order to run daemon.", 500);
         }
 
-        // Basic configuration
-
-        $appName = Daemon::option('appName', null);
-        if (is_null($appName)) {
-            throw new Exception("Must set appName in order to run daemon.", 500);
+        if (!$this->has('appdir')) {
+            throw new Exception("Must set appdir in order to run daemon.", 500);
         }
 
-        $appDescription = Daemon::option('appDescription', null);
-
-        $appDir = Daemon::option('appDir', null);
-        if (is_null($appDir)) {
-            throw new Exception("Must set appDir in order to run daemon.", 500);
-        }
-
-        $appNamespace = Daemon::option('appNamespace', null);
-
-        // Logging
-
-        $appLogLevel = Daemon::option('appLogLevel', 7);
-        Daemon::$logLevel = $appLogLevel;
-        Daemon::$logFile = null;
-
-        $appLogFile = Daemon::option('appLogFile', null);
-        self::openLog($appLogFile);
-
-        // Set up app
+        $appName = $this->get('appname');
+        $appDir = $this->get('appdir');
 
         $appID = strtolower($appName);
         $pidFile = paths($appDir, "{$appID}.pid");
-        Daemon::$options['appLockfile'] = $pidFile;
-
         $runFile = paths('/var/run', "{$appID}.pid");
-        Daemon::$options['appRunfile'] = $runFile;
+
+        $this->lock = new Lock($pidFile, $runFile);
+
+        // Basic configuration
+
+        $appName = $this->get('appname');
+        $appDescription = $this->get('appdescription');
+        $appNamespace = $this->get('appnamespace');
+
+        // Logging
+
+        $appLogLevel = $this->get('logLevel', 7);
+        $this->logLevel = $appLogLevel;
+        $this->logFile = null;
+
+        $appLogFile = $this->get('logFile', null);
+        $this->openLog($appLogFile);
+
+        // Set up app
 
         // Get app class name
         $appClassName = ucfirst($appName);
@@ -196,37 +239,33 @@ class Daemon {
             $appClassName = "\\{$appNamespace}\\{$appClassName}";
         }
 
-        // Preflight App
-        if (method_exists($appClassName, 'preflight')) {
-            $appClassName::preflight();
-        }
+        // Prepare global CLI
 
-        // CLI
+        $this->cli
+            ->description($appDescription)
+            ->meta('filename', $appName)
 
-        $cli = \Garden\Cli\Cli::create()
-                ->description($appDescription)
-                ->meta('filename', $appName)
-                ->command('start')
-                    ->description('Start the application.')
-                    ->opt('watchdog:w', "Don't announce failures to start", false, 'boolean')
-                ->command('stop')
-                    ->description('Stop the application.')
-                ->command('restart')
-                    ->description('Stop the application, then start it again.')
-                ->command('install')
-                    ->description('Install command symlink to /usr/bin');
+            ->command('start')
+                ->description('Start the application.')
+                ->opt('watchdog:w', "Don't announce failures to start", false, 'boolean')
 
-        // Allow app to extend CLI commands
-        if (method_exists($appClassName, 'commands')) {
-            $appClassName::commands($cli);
-        }
+            ->command('stop')
+                ->description('Stop the application.')
+
+            ->command('restart')
+                ->description('Stop the application, then start it again.')
+
+            ->command('install')
+                ->description('Install command symlink to /usr/bin');
+
+        $app = $this->di->get($appClassName);
 
         // Parse CLI
-        $args = $cli->parse($arguments, true);
-        Daemon::setoption('args', $args);
+        $args = $this->cli->parse($arguments, true);
+        $this->set('args', $args);
 
         $command = $args->getCommand();
-        $sysDaemonize = Daemon::option('sysDaemonize', true);
+        $sysDaemonize = $this->get('daemonize', true);
         if (!$sysDaemonize) {
             $command = 'start';
         }
@@ -242,9 +281,11 @@ class Daemon {
             case 'stop':
             case 'restart':
 
-                $runPid = getPid($pidFile);
-                $running = running($runPid);
-                if ($running) {
+                // Check if pid file is currently running
+                $runPid = self::getPid($pidFile);
+                $isRunning = self::isRunning($runPid);
+
+                if ($isRunning) {
 
                     // Stop it
                     posix_kill($runPid, SIGTERM);
@@ -267,7 +308,7 @@ class Daemon {
 
                 if ($command == 'stop') {
                     $message = 'stopped';
-                    if (!$running) {
+                    if (!$isRunning) {
                         $message = 'not running';
                     }
                     throw new Exception(" - {$message}", 500);
@@ -279,7 +320,7 @@ class Daemon {
             case 'start':
 
                 // Check for currently running instance
-                $runConcurrent = Daemon::option('appConcurrent', false);
+                $runConcurrent = $this->get('appConcurrent', false);
                 if (!$runConcurrent) {
                     // Check locks
                     $runPid = getPid($pidFile);
@@ -295,11 +336,11 @@ class Daemon {
                 // Running user
                 $uid = posix_geteuid();
                 $user = posix_getpwuid($uid);
-                Daemon::setoption('user', $user);
+                $this->set('user', $user);
 
                 // Make sure we can do our things
-                $sysUser = Daemon::option('sysRunAsUser', null);
-                $sysGroup = Daemon::option('sysRunAsGroup', null);
+                $sysUser = $this->get('sysRunAsUser', null);
+                $sysGroup = $this->get('sysRunAsGroup', null);
                 if ($sysUser || $sysGroup) {
                     if ($user != 'root') {
                         Daemon::log(Daemon::LOG_L_FATAL, ' - must be running as root to setegid() or seteuid()');
@@ -322,7 +363,7 @@ class Daemon {
                         return 0;
                     }
 
-                    Daemon::setoption('logtoscreen', false);
+                    $this->set('logtoscreen', false);
 
                 } else {
 
@@ -336,20 +377,20 @@ class Daemon {
                 // Invoking user
                 $iusername = trim(shell_exec('logname'));
                 $iuser = posix_getpwnam($iusername);
-                Daemon::setoption('iuser', $iuser);
+                $this->set('iuser', $iuser);
 
                 // Current terminal name
                 $terminal = posix_ttyname(STDOUT);
                 $terminal = str_replace('/dev/', '', $terminal);
-                Daemon::setoption('itty', $terminal);
+                $this->set('itty', $terminal);
 
                 // Coordinate fleet
-                $sysCoordinate = Daemon::option('sysCoordinate', false);
+                $sysCoordinate = $this->get('sysCoordinate', false);
                 if ($sysCoordinate) {
                     $daemon->coordinate();
                 }
 
-                $sysMode = Daemon::option('sysMode', self::MODE_SINGLE);
+                $sysMode = $this->get('sysMode', self::MODE_SINGLE);
                 switch ($sysMode) {
                     case self::MODE_SINGLE:
 
@@ -401,8 +442,8 @@ class Daemon {
      */
     protected function getInstance() {
         if (!($this->instance instanceof App)) {
-            $appName = Daemon::option('appName', null);
-            $appNamespace = Daemon::option('appNamespace', null);
+            $appName = $this->get('appName', null);
+            $appNamespace = $this->get('appNamespace', null);
 
             // Run App
             $appClassName = ucfirst($appName);
@@ -463,14 +504,14 @@ class Daemon {
         }
         Daemon::log(Daemon::LOG_L_THREAD, '');
 
-        $this->exitMode = Daemon::option('exitMode', 'success');
+        $this->exitMode = $this->get('exitMode', 'success');
 
-        $maxFleetSize = Daemon::option('sysFleet', 1);
+        $maxFleetSize = $this->get('sysFleet', 1);
         Daemon::log(Daemon::LOG_L_THREAD, " Launching fleet with {$maxFleetSize} workers", Daemon::LOG_O_SHOWPID);
         do {
 
             // Launch workers until the fleet is deployed
-            if (Daemon::option('launching', true) && $maxFleetSize) {
+            if ($this->get('launching', true) && $maxFleetSize) {
                 do {
                     $fleetSize = $this->fleetSize();
                     if ($fleetSize >= $maxFleetSize) {
@@ -485,7 +526,7 @@ class Daemon {
 
                     // Turn off launching if we didn't launch
                     if (!$launched) {
-                        Daemon::setoption('launching', false);
+                        $this->set('launching', false);
                     }
 
                     /*
@@ -516,13 +557,13 @@ class Daemon {
             } while ($pid > 0);
 
             $fleetSize = $this->fleetSize();
-            $launching = Daemon::option('launching', true) ? 'on' : 'off';
+            $launching = $this->get('launching', true) ? 'on' : 'off';
             Daemon::log(Daemon::LOG_L_THREAD, "  Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}", Daemon::LOG_O_SHOWPID);
 
             // Wait a little (dont tightloop)
             sleep(1);
 
-        } while (Daemon::option('launching', true) || $fleetSize);
+        } while ($this->get('launching', true) || $fleetSize);
 
         // Shut down signal handling in main process
         pcntl_signal(SIGHUP, SIG_DFL);
@@ -685,11 +726,11 @@ class Daemon {
             // Tell init about our pid
             if ($daemon) {
                 Daemon::log(Daemon::LOG_L_THREAD, "  - run pid", Daemon::LOG_O_SHOWPID);
-                file_put_contents_atomic(Daemon::option('appRunfile'), $this->daemonPid);
+                file_put_contents_atomic($this->get('appRunfile'), $this->daemonPid);
             }
 
             // SETGID/SETUID
-            $sysGroup = Daemon::option('sysRunAsGroup', null);
+            $sysGroup = $this->get('sysRunAsGroup', null);
             if (!is_null($sysGroup)) {
 
                 $sysGroupInfo = posix_getgrnam($sysGroup);
@@ -705,7 +746,7 @@ class Daemon {
                 }
             }
 
-            $sysUser = Daemon::option('sysRunAsUser', null);
+            $sysUser = $this->get('sysRunAsUser', null);
             if (!is_null($sysUser)) {
                 $sysUserInfo = posix_getpwnam($sysUser);
                 if (is_array($sysUserInfo)) {
@@ -878,57 +919,17 @@ class Daemon {
     }
 
     /**
-     * Open log file for writing
-     *
-     * Also closes currently open log file if needed.
-     *
-     * @param string $logFile
-     */
-    public static function openLog($logFile) {
-        if ($logFile !== false) {
-            Daemon::setoption('appLogFile', $logFile);
-
-            if (substr($logFile, 0, 1) != '/') {
-                $logFile = paths(Daemon::option('appDir'), $logFile);
-            }
-
-            $appLogDir = dirname($logFile);
-            if (!is_dir($appLogDir) || !file_exists($appLogDir)) {
-                @mkdir($appLogDir, 0755, true);
-            }
-
-            if (file_exists($logFile)) {
-                // Copy to the side after 10mb
-                if (filesize($logFile) > (10 * 1024 * 1024)) {
-                    rename($logFile, "{$logFile}.1");
-                    file_put_contents($logFile, '');
-                }
-            } else {
-                touch($logFile);
-            }
-
-            if (is_writable($logFile)) {
-                if (Daemon::$logFile) {
-                    fclose(Daemon::$logFile);
-                }
-
-                Daemon::$logFile = fopen($logFile, 'a');
-            }
-        }
-    }
-
-    /**
      * Output to log (screen or file or both)
      *
      * @param integer $level event level
      * @param string $message
      * @param type $options
      */
-    public static function log($level, $message, $options = 0) {
+    public function log($level, $message, $options = 0) {
         $output = '';
         $level = (int)$level;
 
-        if (Daemon::$logLevel & $level || Daemon::$logLevel == -1) {
+        if ($this->logLevel & $level || $this->logLevel == -1) {
             if ($options & Daemon::LOG_O_SHOWPID) {
                 $output .= "[" . posix_getpid() . "]";
             }
@@ -948,16 +949,16 @@ class Daemon {
                 $output .= "\n";
             }
 
-            $canLogToFile = Daemon::option('logtofile', true);
-            $canLogToScreen = Daemon::option('logtoscreen', true);
+            $canLogToFile = $this->get('logtofile', true);
+            $canLogToScreen = $this->get('logtoscreen', true);
             $willLogToFile = false;
-            if ($canLogToFile && !is_null(Daemon::$logFile) && !feof(Daemon::$logFile)) {
+            if ($canLogToFile && !is_null($this->logFile) && !feof($this->logFile)) {
                 $willLogToFile = true;
-                fwrite(Daemon::$logFile, $output);
+                fwrite($this->logFile, $output);
 
                 // Check rotation
-                $appLogFile = Daemon::option('appLogFile');
-                $logFileMaxSize = Daemon::option('appLogFileSize', (10 * 1024 * 1024));
+                $appLogFile = $this->get('appLogFile');
+                $logFileMaxSize = $this->get('appLogFileSize', (10 * 1024 * 1024));
                 if (filesize($appLogFile) > $logFileMaxSize) {
                     $replaceLogFile = "{$appLogFile}.1";
                     if (file_exists($replaceLogFile)) {
@@ -966,8 +967,8 @@ class Daemon {
 
                     // Copy to the side after 10mb
                     rename($appLogFile, $replaceLogFile);
-                    fclose(Daemon::$logFile);
-                    Daemon::$logFile = fopen($appLogFile, 'a');
+                    fclose($this->logFile);
+                    $this->logFile = fopen($appLogFile, 'a');
                 }
             }
 
