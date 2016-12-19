@@ -121,6 +121,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /*
      * Logging output modifiers
      */
+    const LOG_O_NONEWLINE = 1;
     const LOG_O_SHOWTIME = 2;
     const LOG_O_SHOWPID = 4;
     const LOG_O_ECHO = 8;
