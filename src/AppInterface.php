@@ -17,8 +17,6 @@ interface AppInterface {
 
     public function run();
 
-    public function preflight();
-
-    public function commands(\Garden\Cli\Cli $cli);
+    public function preflight(\Garden\Cli\Cli $cli);
 
 }
