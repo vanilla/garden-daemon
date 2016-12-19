@@ -266,7 +266,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $command = 'start';
         }
 
-        $this->log();
+        $this->log(Daemon::LOG_L_APP, "App has loaded.");
         die();
 
         $exitCode = null;
@@ -299,7 +299,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                         // Check if it's still running
                         if (running($runPid)) {
-                            Daemon::log(Daemon::LOG_L_FATAL, ' - unable to store daemon');
+                            $this->log(Daemon::LOG_L_FATAL, ' - unable to store daemon');
                             return 1;
                         }
                     }
@@ -312,7 +312,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     }
                     throw new Exception(" - {$message}", 500);
                 } else {
-                    Daemon::log(Daemon::LOG_L_THREAD, ' - restarting...');
+                    $this->log(Daemon::LOG_L_THREAD, ' - restarting...');
                 }
 
             // Start daemon
@@ -327,7 +327,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $watchdog = $args->getOpt('watchdog');
                         $code = $watchdog ? 200 : 500;
 
-                        Daemon::log(Daemon::LOG_L_FATAL, " - already running");
+                        $this->log(Daemon::LOG_L_FATAL, " - already running");
                         return 0;
                     }
                 }
@@ -342,7 +342,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $sysGroup = $this->get('sysRunAsGroup', null);
                 if ($sysUser || $sysGroup) {
                     if ($user != 'root') {
-                        Daemon::log(Daemon::LOG_L_FATAL, ' - must be running as root to setegid() or seteuid()');
+                        $this->log(Daemon::LOG_L_FATAL, ' - must be running as root to setegid() or seteuid()');
                         return 1;
                     }
                 }
@@ -358,7 +358,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                     // Console returns 0
                     if ($realm == 'console') {
-                        Daemon::log(Daemon::LOG_L_THREAD, " - parent exited normally", Daemon::LOG_O_SHOWPID);
+                        $this->log(Daemon::LOG_L_THREAD, " - parent exited normally", Daemon::LOG_O_SHOWPID);
                         return 0;
                     }
 
@@ -366,7 +366,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                 } else {
 
-                    Daemon::log(Daemon::LOG_L_THREAD, "Will not go into background", Daemon::LOG_O_SHOWPID);
+                    $this->log(Daemon::LOG_L_THREAD, "Will not go into background", Daemon::LOG_O_SHOWPID);
                     $daemon->realm = 'daemon';
                 }
 
@@ -494,19 +494,19 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @return void
      */
     protected function loiter() {
-        Daemon::log(Daemon::LOG_L_THREAD, " Entering loiter cycle for fleet", Daemon::LOG_O_SHOWPID | Daemon::LOG_O_NONEWLINE);
+        $this->log(Daemon::LOG_L_THREAD, " Entering loiter cycle for fleet", Daemon::LOG_O_SHOWPID | Daemon::LOG_O_NONEWLINE);
 
         // Sleep for 2 seconds
         for ($i = 0; $i < 2; $i++) {
-            Daemon::log(Daemon::LOG_L_THREAD, '.', Daemon::LOG_O_NONEWLINE);
+            $this->log(Daemon::LOG_L_THREAD, '.', Daemon::LOG_O_NONEWLINE);
             sleep(1);
         }
-        Daemon::log(Daemon::LOG_L_THREAD, '');
+        $this->log(Daemon::LOG_L_THREAD, '');
 
         $this->exitMode = $this->get('exitMode', 'success');
 
         $maxFleetSize = $this->get('sysFleet', 1);
-        Daemon::log(Daemon::LOG_L_THREAD, " Launching fleet with {$maxFleetSize} workers", Daemon::LOG_O_SHOWPID);
+        $this->log(Daemon::LOG_L_THREAD, " Launching fleet with {$maxFleetSize} workers", Daemon::LOG_O_SHOWPID);
         do {
 
             // Launch workers until the fleet is deployed
@@ -538,7 +538,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $fleetSize++;
                     } else {
                         if ($launched === false) {
-                            Daemon::log(Daemon::LOG_L_THREAD, "  Failed to launch worker, moving on to cleanup", Daemon::LOG_O_SHOWPID);
+                            $this->log(Daemon::LOG_L_THREAD, "  Failed to launch worker, moving on to cleanup", Daemon::LOG_O_SHOWPID);
                         }
                     }
                 } while ($launched && $fleetSize < $maxFleetSize);
@@ -557,7 +557,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
             $fleetSize = $this->fleetSize();
             $launching = $this->get('launching', true) ? 'on' : 'off';
-            Daemon::log(Daemon::LOG_L_THREAD, "  Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_THREAD, "  Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}", Daemon::LOG_O_SHOWPID);
 
             // Wait a little (dont tightloop)
             sleep(1);
@@ -576,7 +576,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      */
     protected function launch() {
-        Daemon::log(Daemon::LOG_L_THREAD, " Launching fleet worker", Daemon::LOG_O_SHOWPID);
+        $this->log(Daemon::LOG_L_THREAD, " Launching fleet worker", Daemon::LOG_O_SHOWPID);
 
         // Prepare current state priot to forking
         if (!is_null($this->instance) && method_exists($this->instance, 'prepareProcess')) {
@@ -621,33 +621,33 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         } catch (Exception $ex) {
             $exitMessage = $ex->getMessage();
             $exitFile = $ex->getFile().':'.$ex->getLine();
-            Daemon::log(Daemon::LOG_L_FATAL, "App Exception: {$exitMessage} {$exitFile}", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_FATAL, "App Exception: {$exitMessage} {$exitFile}", Daemon::LOG_O_SHOWPID);
             return 1;
         }
 
-        Daemon::log(Daemon::LOG_L_THREAD, " App exited with status: {$runSuccess}", Daemon::LOG_O_SHOWPID);
+        $this->log(Daemon::LOG_L_THREAD, " App exited with status: {$runSuccess}", Daemon::LOG_O_SHOWPID);
 
         // If this was not a controlled exit
         $exitCode = 0;
         switch ($runSuccess) {
             case self::APP_EXIT_EXIT:
-                Daemon::log(Daemon::LOG_L_THREAD, " Halting from error condition...", Daemon::LOG_O_SHOWPID);
+                $this->log(Daemon::LOG_L_THREAD, " Halting from error condition...", Daemon::LOG_O_SHOWPID);
                 $exitCode = 8;
                 break;
 
             case self::APP_EXIT_HALT:
-                Daemon::log(Daemon::LOG_L_THREAD, " Halting from normal operation...", Daemon::LOG_O_SHOWPID);
+                $this->log(Daemon::LOG_L_THREAD, " Halting from normal operation...", Daemon::LOG_O_SHOWPID);
                 $exitCode = 0;
                 break;
 
             case self::APP_EXIT_RESTART:
-                Daemon::log(Daemon::LOG_L_THREAD, " Gracefully exiting (cron restart)...", Daemon::LOG_O_SHOWPID);
+                $this->log(Daemon::LOG_L_THREAD, " Gracefully exiting (cron restart)...", Daemon::LOG_O_SHOWPID);
                 $exitCode = 2;
                 break;
 
             case self::APP_EXIT_RELOAD:
             default:
-                Daemon::log(Daemon::LOG_L_THREAD, " Preparing to reload...", Daemon::LOG_O_SHOWPID);
+                $this->log(Daemon::LOG_L_THREAD, " Preparing to reload...", Daemon::LOG_O_SHOWPID);
                 $exitCode = 1;
                 break;
         }
@@ -687,7 +687,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $realm = val('parent', $modes[$mode]);
 
             // Parent
-            Daemon::log(Daemon::LOG_L_THREAD, " Parent ({$realm})", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_THREAD, " Parent ({$realm})", Daemon::LOG_O_SHOWPID);
 
             // Record child PID
             $childRealm = val('child', $modes[$mode]);
@@ -700,31 +700,31 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $this->realm = val('child', $modes[$mode]);
 
             // Child
-            Daemon::log(Daemon::LOG_L_THREAD, " Child ({$this->realm})", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_THREAD, " Child ({$this->realm})", Daemon::LOG_O_SHOWPID);
 
             // Lock it up
             if ($lock) {
-                Daemon::log(Daemon::LOG_L_THREAD, " - locking child process", Daemon::LOG_O_SHOWPID);
+                $this->log(Daemon::LOG_L_THREAD, " - locking child process", Daemon::LOG_O_SHOWPID);
                 $pidFile = $lock;
                 $locked = lock($pidFile);
                 if (!$locked) {
-                    Daemon::log(Daemon::LOG_L_WARN, "Unable to lock forked process", Daemon::LOG_O_SHOWPID);
+                    $this->log(Daemon::LOG_L_WARN, "Unable to lock forked process", Daemon::LOG_O_SHOWPID);
                     exit;
                 }
             }
 
-            Daemon::log(Daemon::LOG_L_THREAD, " Configuring child process ({$this->realm})", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_THREAD, " Configuring child process ({$this->realm})", Daemon::LOG_O_SHOWPID);
 
             // Detach
-            Daemon::log(Daemon::LOG_L_THREAD, "  - detach from console", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_THREAD, "  - detach from console", Daemon::LOG_O_SHOWPID);
             if (posix_setsid() == -1) {
-                Daemon::log(Daemon::LOG_L_THREAD, " Unable to detach from the terminal window", Daemon::LOG_O_SHOWPID);
+                $this->log(Daemon::LOG_L_THREAD, " Unable to detach from the terminal window", Daemon::LOG_O_SHOWPID);
                 exit;
             }
 
             // Tell init about our pid
             if ($daemon) {
-                Daemon::log(Daemon::LOG_L_THREAD, "  - run pid", Daemon::LOG_O_SHOWPID);
+                $this->log(Daemon::LOG_L_THREAD, "  - run pid", Daemon::LOG_O_SHOWPID);
                 file_put_contents_atomic($this->get('appRunfile'), $this->daemonPid);
             }
 
@@ -739,9 +739,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $sysSetegid = posix_setegid($sysGID);
                         $sysSetegid = $sysSetegid ? 'success' : 'failed';
                     }
-                    Daemon::log(Daemon::LOG_L_THREAD, "  - setegid... {$sysSetegid}", Daemon::LOG_O_SHOWPID);
+                    $this->log(Daemon::LOG_L_THREAD, "  - setegid... {$sysSetegid}", Daemon::LOG_O_SHOWPID);
                 } else {
-                    Daemon::log(Daemon::LOG_L_THREAD, "  - setegid, no such group '{$sysGroup}'");
+                    $this->log(Daemon::LOG_L_THREAD, "  - setegid, no such group '{$sysGroup}'");
                 }
             }
 
@@ -754,14 +754,14 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $sysSeteuid = posix_seteuid($sysUID);
                         $sysSeteuid = $sysSeteuid ? 'success' : 'failed';
                     }
-                    Daemon::log(Daemon::LOG_L_THREAD, "  - seteuid... {$sysSeteuid}", Daemon::LOG_O_SHOWPID);
+                    $this->log(Daemon::LOG_L_THREAD, "  - seteuid... {$sysSeteuid}", Daemon::LOG_O_SHOWPID);
                 } else {
-                    Daemon::log(Daemon::LOG_L_THREAD, "  - seteuid, no such user '{$sysUser}'");
+                    $this->log(Daemon::LOG_L_THREAD, "  - seteuid, no such user '{$sysUser}'");
                 }
             }
 
             // Close resources
-            //Daemon::log(Daemon::LOG_L_THREAD, "  - close fds", Daemon::LOG_O_SHOWPID);
+            //$this->log(Daemon::LOG_L_THREAD, "  - close fds", Daemon::LOG_O_SHOWPID);
             //fclose(STDIN);
             //fclose(STDOUT);
             //fclose(STDERR);
@@ -770,7 +770,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         } else {
 
             // Failed
-            Daemon::log(Daemon::LOG_L_FATAL, "  Failed to fork process", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_FATAL, "  Failed to fork process", Daemon::LOG_O_SHOWPID);
             exit(1);
         }
     }
@@ -781,7 +781,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @param integer $signal
      */
     public function signal($signal) {
-        Daemon::log(Daemon::LOG_L_THREAD, "Caught signal '{$signal}'", Daemon::LOG_O_SHOWPID);
+        $this->log(Daemon::LOG_L_THREAD, "Caught signal '{$signal}'", Daemon::LOG_O_SHOWPID);
 
         switch ($signal) {
 
@@ -862,7 +862,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $workerType = val($pid, $this->children);
             unset($this->children[$pid]);
             $fleetSize = $this->fleetSize();
-            Daemon::log(Daemon::LOG_L_THREAD, "Landing fleet '{$workerType}' with PID {$pid} ({$fleetSize} still in the air)", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_THREAD, "Landing fleet '{$workerType}' with PID {$pid} ({$fleetSize} still in the air)", Daemon::LOG_O_SHOWPID);
         }
     }
 
@@ -873,7 +873,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     protected function genocide() {
         static $killing = false;
         if (!$killing) {
-            Daemon::log(Daemon::LOG_L_THREAD, "Shutting down fleet operations...", Daemon::LOG_O_SHOWPID);
+            $this->log(Daemon::LOG_L_THREAD, "Shutting down fleet operations...", Daemon::LOG_O_SHOWPID);
             $killing = true;
             foreach ($this->children as $childpid => $childtype) {
                 posix_kill($childpid, SIGKILL);
