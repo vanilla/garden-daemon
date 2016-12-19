@@ -34,7 +34,7 @@ use Interop\Container\ContainerInterface;
 class Daemon implements ContainerInterface, LoggerAwareInterface {
 
     use LoggerAwareTrait;
-    
+
     const MODE_SINGLE = 'single';
     const MODE_FLEET = 'fleet';
 
@@ -984,7 +984,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             if (STDOUT) {
                 // Allow echoing too
                 if ($canLogToScreen || !$canLogToPersist || ($canLogToPersist && ($options & Daemon::LOG_O_ECHO))) {
-                    echo $format;
+                    echo $this->interpolateContext($format, $context);
                 }
             }
         }
@@ -1009,6 +1009,24 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         ];
 
         return $levels[$level] ?? LogLevel::INFO;
+    }
+
+    /**
+     * Interpolate contexts into messages containing bracket-wrapped format strings.
+     *
+     * @param string $format
+     * @param array $context optional. array of key-value pairs to replace into the format.
+     */
+    protected function interpolateContext($format, $context = []) {
+        $final = preg_replace_callback('/{([^\s][^}]+[^\s]?)}/', function ($matches) use ($context) {
+            $field = trim($matches[1], '{}');
+            if (array_key_exists($field, $context)) {
+                return $context[$field];
+            } else {
+                return $matches[1];
+            }
+        }, $format);
+        return $final;
     }
 
 }
