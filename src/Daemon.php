@@ -34,8 +34,7 @@ use Interop\Container\ContainerInterface;
 class Daemon implements ContainerInterface, LoggerAwareInterface {
 
     use LoggerAwareTrait;
-    use LoggerBoilerTrait;
-
+    
     const MODE_SINGLE = 'single';
     const MODE_FLEET = 'fleet';
 
