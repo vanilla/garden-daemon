@@ -120,7 +120,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
     public static $logLevel = -1;
 
-    private function __construct(Cli $cli, Container $di, array $options) {
+    public function __construct(Cli $cli, Container $di, array $options) {
         $this->parentPid = posix_getpid();
         $this->daemonPid = null;
         $this->childPid = null;
