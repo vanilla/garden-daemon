@@ -90,10 +90,17 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
     /**
      * Lock manager
-     * @var Lock
+     * @var \Garden\Daemon\Lock
      */
     protected $lock;
 
+    /**
+     * Configuration store
+     * @var array
+     */
+    protected $config;
+
+    public $logLevel = -1;
     protected $exitMode = 'success';
     protected $exit = 0;
 
@@ -118,9 +125,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     const LOG_O_SHOWPID = 4;
     const LOG_O_ECHO = 8;
 
-    public static $logLevel = -1;
-
-    public function __construct(Cli $cli, Container $di, array $options) {
+    public function __construct(Cli $cli, Container $di, array $options, array $config) {
         $this->parentPid = posix_getpid();
         $this->daemonPid = null;
         $this->childPid = null;
@@ -129,7 +134,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
         $this->cli = $cli;
         $this->di = $di;
-        $this->options = $options;
+        $this->options = array_merge($options, $config);
 
         declare (ticks = 100);
 
@@ -224,7 +229,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
         // Logging
 
-        $appLogLevel = $this->get('logLevel', 7);
+        $appLogLevel = $this->get('loglevel', 7);
         $this->logLevel = $appLogLevel;
 
         // Set up app
