@@ -10,6 +10,7 @@ namespace Garden\Daemon;
 use Garden\Cli\Cli;
 use Garden\Container\Container;
 
+use Psr\Log\LogLevel;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 
@@ -117,7 +118,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     const LOG_O_SHOWPID = 4;
     const LOG_O_ECHO = 8;
 
-    public static $logFile = null;
     public static $logLevel = -1;
 
     private function __construct(Cli $cli, Container $di, array $options) {
@@ -226,10 +226,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
         $appLogLevel = $this->get('logLevel', 7);
         $this->logLevel = $appLogLevel;
-        $this->logFile = null;
-
-        $appLogFile = $this->get('logFile', null);
-        $this->openLog($appLogFile);
 
         // Set up app
 
@@ -258,7 +254,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             ->command('install')
                 ->description('Install command symlink to /usr/bin');
 
-        $app = $this->di->get($appClassName);
+        $this->di->get($appClassName);
 
         // Parse CLI
         $args = $this->cli->parse($arguments, true);
@@ -269,6 +265,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         if (!$sysDaemonize) {
             $command = 'start';
         }
+
+        $this->log();
+        die();
 
         $exitCode = null;
         switch ($command) {
@@ -926,59 +925,71 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @param type $options
      */
     public function log($level, $message, $options = 0) {
-        $output = '';
+        $format = '';
         $level = (int)$level;
+        $logPriority = $this->loggerPriority($level);
+
+        $context = [
+            'priority' => $logPriority,
+            'pid' => posix_getpid(),
+            'time' => Daemon::time('now')->format('Y-m-d H:i:s'),
+            'message' => $message
+        ];
 
         if ($this->logLevel & $level || $this->logLevel == -1) {
             if ($options & Daemon::LOG_O_SHOWPID) {
-                $output .= "[" . posix_getpid() . "]";
+                $format .= "[{pid}]";
             }
 
             if ($options & Daemon::LOG_O_SHOWTIME) {
-                $time = Daemon::time('now');
-                $output .= "[" . $time->format('Y-m-d H:i:s') . "]";
+                $format .= "[{time}]";
             }
 
             // Pad output if there are tags
-            if (strlen($output)) {
-                $output .= ' ';
+            if (strlen($format)) {
+                $format .= ' ';
             }
 
-            $output .= $message;
+            $format .= '{message}';
             if (!($options & Daemon::LOG_O_NONEWLINE)) {
-                $output .= "\n";
+                $format .= "\n";
             }
 
-            $canLogToFile = $this->get('logtofile', true);
+            $canLogToPersist = $this->get('logtopersist', true);
             $canLogToScreen = $this->get('logtoscreen', true);
-            $willLogToFile = false;
-            if ($canLogToFile && !is_null($this->logFile) && !feof($this->logFile)) {
-                $willLogToFile = true;
-                fwrite($this->logFile, $output);
 
-                // Check rotation
-                $appLogFile = $this->get('appLogFile');
-                $logFileMaxSize = $this->get('appLogFileSize', (10 * 1024 * 1024));
-                if (filesize($appLogFile) > $logFileMaxSize) {
-                    $replaceLogFile = "{$appLogFile}.1";
-                    if (file_exists($replaceLogFile)) {
-                        unlink($replaceLogFile);
-                    }
-
-                    // Copy to the side after 10mb
-                    rename($appLogFile, $replaceLogFile);
-                    fclose($this->logFile);
-                    $this->logFile = fopen($appLogFile, 'a');
-                }
+            if ($canLogToPersist) {
+                $this->getLogger()->log($logPriority, $format, $context);
             }
 
             if (STDOUT) {
                 // Allow echoing too
-                if ($canLogToScreen || !$willLogToFile || ($willLogToFile && ($options & Daemon::LOG_O_ECHO))) {
-                    echo $output;
+                if ($canLogToScreen || !$canLogToPersist || ($canLogToPersist && ($options & Daemon::LOG_O_ECHO))) {
+                    echo $format;
                 }
             }
         }
+    }
+
+    /**
+     * Get log level
+     *
+     * @param integer $level
+     * @retun string
+     */
+    protected function loggerPriority($level) {
+        $levels = [
+            self::LOG_L_FATAL   => LogLevel::ERROR,
+            self::LOG_L_WARN    => LogLevel::WARNING,
+            self::LOG_L_NOTICE  => LogLevel::NOTICE,
+            self::LOG_L_INFO    => LogLevel::INFO,
+            self::LOG_L_THREAD  => LogLevel::INFO,
+            self::LOG_L_APP     => LogLevel::INFO,
+            self::LOG_L_EVENT   => LogLevel::INFO,
+            self::LOG_L_API     => LogLevel::INFO
+        ];
+
+        return $levels[$level] ?? LogLevel::INFO;
     }
 
 }
