@@ -11,6 +11,8 @@ use Garden\Cli\Cli;
 use Garden\Container\Container;
 
 use Psr\Log\LogLevel;
+use Psr\Log\NullLogger;
+use Psr\Log\LoggerInterface;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 
@@ -922,6 +924,17 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         }
 
         return $date;
+    }
+
+    /**
+     * Get a logger
+     * @return \Psr\Log\LoggerInterface
+     */
+    public function getLogger() {
+        if (!($this->logger instanceof LoggerInterface)) {
+            return new NullLogger;
+        }
+        return $this->logger;
     }
 
     /**
