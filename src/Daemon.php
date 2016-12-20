@@ -330,7 +330,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 // Daemonize
                 if ($sysDaemonize) {
 
-                    $realm = $this->fork('daemon', true, true);
+                    $realm = $this->fork('daemon', true);
                     $this->realm = $realm;
 
                     // Console returns 0
@@ -417,7 +417,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      */
     protected function initialize() {
-
         declare (ticks = 100);
 
         // Install signal handlers
@@ -454,7 +453,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /**
      * Instantiate and coordinate
      *
-     * If 'sysCoordinate' is true, we need to create an instance of the payload
+     * If 'coordinate' is true, we need to create an instance of the payload
      * class and execute its 'coordinate' method. This is a situation where the
      * payload class is acting as a fleet dispatcher for the sysFleet.
      *
@@ -654,7 +653,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @param bool $lock optional. false gives no lock protection, true re-locks on $this->lock
      */
     protected function fork(string $mode, bool $lock = false) {
-
+        
         $modes = [
             'daemon' => [
                 'parent' => 'console',
@@ -746,10 +745,11 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             }
 
             // Close resources
-            //$this->log(LogLevel::DEBUG, "  - close fds", Daemon::LOG_O_SHOWPID);
+            //$this->log(LogLevel::DEBUG, "[{pid}]  - close fds");
             //fclose(STDIN);
             //fclose(STDOUT);
             //fclose(STDERR);
+
             // Return as child
             return $this->realm;
         } else {
