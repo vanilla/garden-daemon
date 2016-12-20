@@ -186,7 +186,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @return void
      * @throws DaemonException
      */
-    public function attach($arguments = null) {
+    public function attach(array $arguments = null): int {
 
         if (!$this->has('appname')) {
             throw new Exception("Must set appname in order to run daemon.", 500);
@@ -413,6 +413,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
     /**
      * Post-daemonize initialization
+     *
      */
     protected function initialize() {
 
@@ -431,10 +432,10 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /**
      * Get an instance of the app
      *
-     * @return App
+     * @return AppInterface
      */
-    protected function getInstance() {
-        if (!($this->instance instanceof App)) {
+    protected function getInstance(): AppInterface {
+        if (!($this->instance instanceof AppInterface)) {
             $appName = $this->get('appname', null);
             $appNamespace = $this->get('appnamespace', null);
 
@@ -485,7 +486,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /**
      * Loiter, launching fleet and waiting for them to land
      *
-     * @return void
      */
     protected function loiter() {
         $this->log(LogLevel::DEBUG, "[{pid}]  Entering loiter cycle for fleet");
@@ -564,8 +564,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /**
      * Launch a fleet worker
      *
+     * @return bool
      */
-    protected function launch() {
+    protected function launch(): bool {
         $this->log(LogLevel::DEBUG, "[{pid}]  Launching fleet worker");
 
         // Prepare current state priot to forking
@@ -601,8 +602,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * Run application
      *
      * @internal POST FORK, POST FLEET
+     * @return int
      */
-    protected function runApp() {
+    protected function runApp(): int {
         $this->getInstance();
 
         try {
@@ -648,9 +650,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * Fork into the background
      *
      * @param string $mode return realm label provider
-     * @param boolean $lock optional. false gives no lock protection, true re-locks on $this->lock
+     * @param bool $lock optional. false gives no lock protection, true re-locks on $this->lock
      */
-    protected function fork($mode, $daemon = false, $lock = false) {
+    protected function fork(string $mode, bool $lock = false) {
 
         $modes = [
             'daemon' => [
@@ -762,7 +764,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @param int $signal
      */
-    public function signal($signal) {
+    public function signal(int $signal) {
         $this->log(LogLevel::DEBUG, "[{pid}] Caught signal '{$signal}'");
 
         switch ($signal) {
@@ -818,9 +820,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /**
      * How big is our fleet of workers right now?
      *
-     * @return integer
+     * @return int
      */
-    public function fleetSize() {
+    public function fleetSize(): int {
         return sizeof($this->children);
     }
 
@@ -830,7 +832,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @param int $pid
      * @param int $status
      */
-    protected function land($pid, $status = null) {
+    protected function land(int $pid, int $status = null) {
         // One of ours?
         if (array_key_exists($pid, $this->children)) {
 
@@ -920,7 +922,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @param array $context optional.
      * @param type $options optional.
      */
-    public function log(string $level, string $message, array $context = [], integer $options = 1) {
+    public function log(string $level, string $message, array $context = [], int $options = 1) {
         $format = '';
         $priority = $this->levelPriority($level);
 
