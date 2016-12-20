@@ -16,11 +16,9 @@ namespace Garden\Daemon;
 class Lock {
 
     protected $pidFile;
-    protected $runFile;
 
-    public function __construct($pidFile, $runFile) {
+    public function __construct($pidFile) {
         $this->pidFile = $pidFile;
-        $this->runFile = $runFile;
     }
 
     /**
@@ -69,12 +67,13 @@ class Lock {
         }
 
         // Is the PID running?
-        posix_kill($lockPid, 0);
-        $psExists = !(bool)posix_get_last_error();
+        $isRunning = $this->isProcessRunning($lockPid);
 
         // No? Unlock and return Locked=false
-        if (!$psExists && $recover) {
-            $this->unlock($this->pidFile);
+        if (!$isRunning) {
+            if ($recover) {
+                $this->unlock($this->pidFile);
+            }
             return false;
         }
 
@@ -110,7 +109,7 @@ class Lock {
      *
      * @return integer|false
      */
-    public function getLockPid() {
+    public function getRunningPID() {
         if (!file_exists($this->pidFile)) {
             return false;
         }

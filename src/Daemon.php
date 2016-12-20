@@ -216,19 +216,16 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         }
 
         $appName = $this->get('appname');
-        $appDir = $this->get('appdir');
 
         $appID = strtolower($appName);
-        $pidFile = paths($appDir, "{$appID}.pid");
         $runFile = paths('/var/run', "{$appID}.pid");
 
-        $this->lock = new Lock($pidFile, $runFile);
+        $this->lock = new Lock($runFile);
 
         // Basic configuration
 
         $appName = $this->get('appname');
         $appDescription = $this->get('appdescription');
-        $appNamespace = $this->get('appnamespace');
 
         // Logging
 
@@ -236,12 +233,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $this->logLevel = $appLogLevel;
 
         // Set up app
-
-        // Get app class name
-        $appClassName = ucfirst($appName);
-        if (!is_null($appNamespace)) {
-            $appClassName = "\\{$appNamespace}\\{$appClassName}";
-        }
 
         // Prepare global CLI
 
@@ -262,7 +253,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             ->command('install')
                 ->description('Install command symlink to /usr/bin');
 
-        $this->di->get($appClassName);
+        $application = $this->getInstance();
 
         // Parse CLI
         $args = $this->cli->parse($arguments, true);
@@ -273,9 +264,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         if (!$sysDaemonize) {
             $command = 'start';
         }
-
-        $this->log(Daemon::LOG_L_APP, "App has loaded.");
-        die();
 
         $exitCode = null;
         switch ($command) {
@@ -289,8 +277,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             case 'restart':
 
                 // Check if pid file is currently running
-                $runPid = self::getPid($pidFile);
-                $isRunning = self::isRunning($runPid);
+                $runPid = $this->lock->getRunningPID();
+                $isRunning = $this->lock->isLocked();
 
                 if ($isRunning) {
 
@@ -299,15 +287,15 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     sleep(1);
 
                     // Check if it's still running
-                    if (running($runPid)) {
+                    if ($this->lock->isProcessRunning($runPid)) {
 
                         // Kill it harder
                         posix_kill($runPid, SIGKILL);
                         sleep(1);
 
                         // Check if it's still running
-                        if (running($runPid)) {
-                            $this->log(Daemon::LOG_L_FATAL, ' - unable to store daemon');
+                        if ($this->lock->isProcessRunning($runPid)) {
+                            $this->log(Daemon::LOG_L_WARN, ' - unable to stop daemon');
                             return 1;
                         }
                     }
@@ -327,16 +315,19 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             case 'start':
 
                 // Check for currently running instance
-                $runConcurrent = $this->get('appConcurrent', false);
+                $runConcurrent = $this->get('concurrent', false);
                 if (!$runConcurrent) {
-                    // Check locks
-                    $runPid = getPid($pidFile);
-                    if (running($runPid)) {
-                        $watchdog = $args->getOpt('watchdog');
-                        $code = $watchdog ? 200 : 500;
 
-                        $this->log(Daemon::LOG_L_FATAL, " - already running");
-                        return 0;
+                    // Check locks
+                    $runPid = $this->lock->getRunningPID();
+                    $isRunning = $this->lock->isLocked();
+
+                    if ($isRunning) {
+                        $watchdog = $args->getOpt('watchdog');
+                        $code = $watchdog ? 0 : 1;
+
+                        $this->log(Daemon::LOG_L_INFO, " - already running");
+                        return $code;
                     }
                 }
 
@@ -346,8 +337,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $this->set('user', $user);
 
                 // Make sure we can do our things
-                $sysUser = $this->get('sysRunAsUser', null);
-                $sysGroup = $this->get('sysRunAsGroup', null);
+                $sysUser = $this->get('runasuser', null);
+                $sysGroup = $this->get('runasgroup', null);
                 if ($sysUser || $sysGroup) {
                     if ($user != 'root') {
                         $this->log(Daemon::LOG_L_FATAL, ' - must be running as root to setegid() or seteuid()');
@@ -355,14 +346,11 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     }
                 }
 
-                $daemon = new Daemon();
-                $daemon->getInstance();
-
                 // Daemonize
                 if ($sysDaemonize) {
 
-                    $realm = $daemon->fork('daemon', true, $pidFile);
-                    $daemon->realm = $realm;
+                    $realm = $this->fork('daemon', true, true);
+                    $this->realm = $realm;
 
                     // Console returns 0
                     if ($realm == 'console') {
@@ -370,16 +358,17 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         return 0;
                     }
 
-                    $this->set('logtoscreen', false);
+                    // Inform app that we have daemonized
+                    $application->initialize($args);
 
                 } else {
 
                     $this->log(Daemon::LOG_L_THREAD, "Will not go into background", Daemon::LOG_O_SHOWPID);
-                    $daemon->realm = 'daemon';
+                    $this->realm = 'daemon';
                 }
 
                 // Daemon returns execution to the main file
-                $daemon->daemonPid = posix_getpid();
+                $this->daemonPid = posix_getpid();
 
                 // Invoking user
                 $iusername = trim(shell_exec('logname'));
@@ -392,35 +381,35 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $this->set('itty', $terminal);
 
                 // Coordinate fleet
-                $sysCoordinate = $this->get('sysCoordinate', false);
+                $sysCoordinate = $this->get('coordinate', false);
                 if ($sysCoordinate) {
-                    $daemon->coordinate();
+                    $this->coordinate();
                 }
 
-                $sysMode = $this->get('sysMode', self::MODE_SINGLE);
+                $sysMode = $this->get('mode', self::MODE_SINGLE);
                 switch ($sysMode) {
                     case self::MODE_SINGLE:
 
                         // Run app
-                        $daemon->runApp();
+                        $this->runApp();
 
                         break;
 
                     case self::MODE_FLEET:
 
                         // Launch and maintain fleet
-                        $daemon->loiter();
+                        $this->loiter();
 
                         break;
                 }
 
                 // Dismiss payload
                 if ($sysCoordinate) {
-                    $daemon->dismiss();
+                    $this->dismiss();
                 }
 
                 // Pipe exit code to wrapper file
-                $exitCode = $daemon->exit;
+                $exitCode = $this->exit;
 
                 break;
 
@@ -428,8 +417,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $exitHandled = null;
 
                 // Hand off control to app
-                if (method_exists($appClassName, 'cli')) {
-                    $exitHandled = $appClassName::cli($args);
+                if (method_exists($application, 'cli')) {
+                    $exitHandled = call_user_func([$application, 'cli'], $args);
                 }
 
                 // Command not handled by app
@@ -449,8 +438,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      */
     protected function getInstance() {
         if (!($this->instance instanceof App)) {
-            $appName = $this->get('appName', null);
-            $appNamespace = $this->get('appNamespace', null);
+            $appName = $this->get('appname', null);
+            $appNamespace = $this->get('appnamespace', null);
 
             // Run App
             $appClassName = ucfirst($appName);
@@ -458,7 +447,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $appClassName = "\\{$appNamespace}\\{$appClassName}";
             }
 
-            $this->instance = new $appClassName();
+            $this->instance = $this->di->get($appClassName);
         }
         return $this->instance;
     }
@@ -511,9 +500,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         }
         $this->log(Daemon::LOG_L_THREAD, '');
 
-        $this->exitMode = $this->get('exitMode', 'success');
+        $this->exitMode = $this->get('exitmode', 'success');
 
-        $maxFleetSize = $this->get('sysFleet', 1);
+        $maxFleetSize = $this->get('fleet', 1);
         $this->log(Daemon::LOG_L_THREAD, " Launching fleet with {$maxFleetSize} workers", Daemon::LOG_O_SHOWPID);
         do {
 
@@ -666,22 +655,20 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * Fork into the background
      *
      * @param string $mode return realm label provider
-     * @param string|boolean $lock optional. false gives no lock protection, anything
-     *    else is treated as the path to a pidfile.
+     * @param boolean $lock optional. false gives no lock protection, true re-locks on $this->lock
      */
     protected function fork($mode, $daemon = false, $lock = false) {
-        //declare (ticks = 1);
 
-        $modes = array(
-            'daemon' => array(
+        $modes = [
+            'daemon' => [
                 'parent' => 'console',
                 'child' => 'daemon'
-            ),
-            'fleet' => array(
+            ],
+            'fleet' => [
                 'parent' => 'daemon',
                 'child' => 'worker'
-            )
-        );
+            ]
+        ];
         if (!array_key_exists($mode, $modes)) {
             return false;
         }
@@ -703,6 +690,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
             // Return as parent
             return $realm;
+
         } else if ($pid == 0) {
 
             $this->realm = val('child', $modes[$mode]);
@@ -710,11 +698,10 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             // Child
             $this->log(Daemon::LOG_L_THREAD, " Child ({$this->realm})", Daemon::LOG_O_SHOWPID);
 
-            // Lock it up
+            // Re-lock process
             if ($lock) {
                 $this->log(Daemon::LOG_L_THREAD, " - locking child process", Daemon::LOG_O_SHOWPID);
-                $pidFile = $lock;
-                $locked = lock($pidFile);
+                $locked = $this->lock->lock();
                 if (!$locked) {
                     $this->log(Daemon::LOG_L_WARN, "Unable to lock forked process", Daemon::LOG_O_SHOWPID);
                     exit;
@@ -730,14 +717,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 exit;
             }
 
-            // Tell init about our pid
-            if ($daemon) {
-                $this->log(Daemon::LOG_L_THREAD, "  - run pid", Daemon::LOG_O_SHOWPID);
-                file_put_contents_atomic($this->get('appRunfile'), $this->daemonPid);
-            }
-
             // SETGID/SETUID
-            $sysGroup = $this->get('sysRunAsGroup', null);
+            $sysGroup = $this->get('runasgroup', null);
             if (!is_null($sysGroup)) {
 
                 $sysGroupInfo = posix_getgrnam($sysGroup);
@@ -753,7 +734,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 }
             }
 
-            $sysUser = $this->get('sysRunAsUser', null);
+            $sysUser = $this->get('runasuser', null);
             if (!is_null($sysUser)) {
                 $sysUserInfo = posix_getpwnam($sysUser);
                 if (is_array($sysUserInfo)) {
@@ -974,19 +955,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $format .= "\n";
             }
 
-            $canLogToPersist = $this->get('logtopersist', true);
-            $canLogToScreen = $this->get('logtoscreen', true);
-
-            if ($canLogToPersist) {
-                $this->getLogger()->log($logPriority, $format, $context);
-            }
-
-            if (STDOUT) {
-                // Allow echoing too
-                if ($canLogToScreen || !$canLogToPersist || ($canLogToPersist && ($options & Daemon::LOG_O_ECHO))) {
-                    echo $this->interpolateContext($format, $context);
-                }
-            }
+            $this->getLogger()->log($logPriority, $format, $context);
         }
     }
 

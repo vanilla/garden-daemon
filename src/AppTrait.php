@@ -16,16 +16,27 @@ namespace Garden\Daemon;
 trait AppTrait {
 
     /**
-     *
+     * CLI Definition
      * @var \Garden\Cli\Cli
      */
     protected $cli;
+
+    /**
+     * CLI Arguments
+     * @var \Garden\Cli\Args
+     */
+    protected $args;
 
     /**
      *
      */
     public function preflight(\Garden\Cli\Cli $cli) {
         $this->cli = $cli;
+    }
+
+
+    public function initialize(\Garden\Cli\Args $args) {
+        $this->args = $args;
     }
 
 }
