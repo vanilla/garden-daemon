@@ -85,6 +85,12 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     protected $cli;
 
     /**
+     * CLI Args
+     * @var \Garden\Cli\Args
+     */
+    protected $args;
+
+    /**
      * DI Container
      * @var \Garden\Container\Container
      */
@@ -121,14 +127,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $this->cli = $cli;
         $this->di = $di;
         $this->options = array_merge($options, $config);
-
-        declare (ticks = 100);
-
-        // Install signal handlers
-        pcntl_signal(SIGHUP, array($this, 'signal'));
-        pcntl_signal(SIGINT, array($this, 'signal'));
-        pcntl_signal(SIGTERM, array($this, 'signal'));
-        pcntl_signal(SIGCHLD, array($this, 'signal'));
     }
 
     /**
@@ -238,10 +236,10 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $application = $this->getInstance();
 
         // Parse CLI
-        $args = $this->cli->parse($arguments, true);
-        $this->set('args', $args);
+        $this->args = $this->cli->parse($arguments, true);
+        $this->set('args', $this->args);
 
-        $command = $args->getCommand();
+        $command = $this->args->getCommand();
         $sysDaemonize = $this->get('daemonize', true);
         if (!$sysDaemonize) {
             $command = 'start';
@@ -305,7 +303,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     $isRunning = $this->lock->isLocked();
 
                     if ($isRunning) {
-                        $watchdog = $args->getOpt('watchdog');
+                        $watchdog = $this->args->getOpt('watchdog');
                         $code = $watchdog ? 0 : 1;
 
                         $this->log(LogLevel::INFO, " - already running");
@@ -340,8 +338,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         return 0;
                     }
 
-                    // Inform app that we have daemonized
-                    $application->initialize($args);
+                    // We are now a forked daemon
+                    $this->initialize();
 
                 } else {
 
@@ -400,7 +398,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                 // Hand off control to app
                 if (method_exists($application, 'cli')) {
-                    $exitHandled = call_user_func([$application, 'cli'], $args);
+                    $exitHandled = call_user_func([$application, 'cli'], $this->args);
                 }
 
                 // Command not handled by app
@@ -411,6 +409,23 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         }
 
         return $exitCode;
+    }
+
+    /**
+     * Post-daemonize initialization
+     */
+    protected function initialize() {
+
+        declare (ticks = 100);
+
+        // Install signal handlers
+        pcntl_signal(SIGHUP, array($this, 'signal'));
+        pcntl_signal(SIGINT, array($this, 'signal'));
+        pcntl_signal(SIGTERM, array($this, 'signal'));
+        pcntl_signal(SIGCHLD, array($this, 'signal'));
+
+        // Inform app that we've formed
+        $this->getInstance()->initialize($this->args);
     }
 
     /**
