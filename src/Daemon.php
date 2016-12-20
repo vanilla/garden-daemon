@@ -107,26 +107,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     protected $exit = 0;
 
     /*
-     * Logging levels
-     */
-
-    const LOG_L_FATAL = 1;
-    const LOG_L_WARN = 2;
-    const LOG_L_NOTICE = 4;
-    const LOG_L_INFO = 8;
-    const LOG_L_THREAD = 16;
-    const LOG_L_APP = 32;
-    const LOG_L_EVENT = 64;
-    const LOG_L_API = 128;
-    const LOG_L_ALL = 255;
-
-    /*
      * Logging output modifiers
      */
-    const LOG_O_NONEWLINE = 1;
-    const LOG_O_SHOWTIME = 2;
-    const LOG_O_SHOWPID = 4;
-    const LOG_O_ECHO = 8;
+    const LOG_O_SHOWTIME = 1;
 
     public function __construct(Cli $cli, Container $di, array $options, array $config) {
         $this->parentPid = posix_getpid();
@@ -229,8 +212,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
         // Logging
 
-        $appLogLevel = $this->get('loglevel', 7);
-        $this->logLevel = $appLogLevel;
+        $this->logLevel = $this->get('loglevel', LogLevel::WARNING);
 
         // Set up app
 
@@ -295,7 +277,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                         // Check if it's still running
                         if ($this->lock->isProcessRunning($runPid)) {
-                            $this->log(Daemon::LOG_L_WARN, ' - unable to stop daemon');
+                            $this->log(LogLevel::WARNING, ' - unable to stop daemon');
                             return 1;
                         }
                     }
@@ -308,7 +290,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     }
                     throw new Exception(" - {$message}", 500);
                 } else {
-                    $this->log(Daemon::LOG_L_THREAD, ' - restarting...');
+                    $this->log(LogLevel::WARNING, ' - restarting...');
                 }
 
             // Start daemon
@@ -326,7 +308,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $watchdog = $args->getOpt('watchdog');
                         $code = $watchdog ? 0 : 1;
 
-                        $this->log(Daemon::LOG_L_INFO, " - already running");
+                        $this->log(LogLevel::INFO, " - already running");
                         return $code;
                     }
                 }
@@ -341,7 +323,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $sysGroup = $this->get('runasgroup', null);
                 if ($sysUser || $sysGroup) {
                     if ($user != 'root') {
-                        $this->log(Daemon::LOG_L_FATAL, ' - must be running as root to setegid() or seteuid()');
+                        $this->log(LogLevel::ERROR, ' - must be running as root to setegid() or seteuid()');
                         return 1;
                     }
                 }
@@ -354,7 +336,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                     // Console returns 0
                     if ($realm == 'console') {
-                        $this->log(Daemon::LOG_L_THREAD, " - parent exited normally", Daemon::LOG_O_SHOWPID);
+                        $this->log(LogLevel::DEBUG, "[{pid}] - parent exited normally");
                         return 0;
                     }
 
@@ -363,7 +345,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                 } else {
 
-                    $this->log(Daemon::LOG_L_THREAD, "Will not go into background", Daemon::LOG_O_SHOWPID);
+                    $this->log(LogLevel::DEBUG, "[{pid}] will not go into background");
                     $this->realm = 'daemon';
                 }
 
@@ -491,19 +473,15 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @return void
      */
     protected function loiter() {
-        $this->log(Daemon::LOG_L_THREAD, " Entering loiter cycle for fleet", Daemon::LOG_O_SHOWPID | Daemon::LOG_O_NONEWLINE);
+        $this->log(LogLevel::DEBUG, "[{pid}]  Entering loiter cycle for fleet");
 
         // Sleep for 2 seconds
-        for ($i = 0; $i < 2; $i++) {
-            $this->log(Daemon::LOG_L_THREAD, '.', Daemon::LOG_O_NONEWLINE);
-            sleep(1);
-        }
-        $this->log(Daemon::LOG_L_THREAD, '');
+        sleep(2);
 
         $this->exitMode = $this->get('exitmode', 'success');
 
         $maxFleetSize = $this->get('fleet', 1);
-        $this->log(Daemon::LOG_L_THREAD, " Launching fleet with {$maxFleetSize} workers", Daemon::LOG_O_SHOWPID);
+        $this->log(LogLevel::DEBUG, "[{pid}]  Launching fleet with {$maxFleetSize} workers");
         do {
 
             // Launch workers until the fleet is deployed
@@ -535,7 +513,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $fleetSize++;
                     } else {
                         if ($launched === false) {
-                            $this->log(Daemon::LOG_L_THREAD, "  Failed to launch worker, moving on to cleanup", Daemon::LOG_O_SHOWPID);
+                            $this->log(LogLevel::DEBUG, "[{pid}]   Failed to launch worker, moving on to cleanup");
                         }
                     }
                 } while ($launched && $fleetSize < $maxFleetSize);
@@ -554,7 +532,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
             $fleetSize = $this->fleetSize();
             $launching = $this->get('launching', true) ? 'on' : 'off';
-            $this->log(Daemon::LOG_L_THREAD, "  Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::DEBUG, "[{pid}]   Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}");
 
             // Wait a little (dont tightloop)
             sleep(1);
@@ -573,7 +551,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      */
     protected function launch() {
-        $this->log(Daemon::LOG_L_THREAD, " Launching fleet worker", Daemon::LOG_O_SHOWPID);
+        $this->log(LogLevel::DEBUG, "[{pid}]  Launching fleet worker");
 
         // Prepare current state priot to forking
         if (!is_null($this->instance) && method_exists($this->instance, 'prepareProcess')) {
@@ -618,33 +596,33 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         } catch (Exception $ex) {
             $exitMessage = $ex->getMessage();
             $exitFile = $ex->getFile().':'.$ex->getLine();
-            $this->log(Daemon::LOG_L_FATAL, "App Exception: {$exitMessage} {$exitFile}", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::ERROR, "[{pid}] App Exception: {$exitMessage} {$exitFile}");
             return 1;
         }
 
-        $this->log(Daemon::LOG_L_THREAD, " App exited with status: {$runSuccess}", Daemon::LOG_O_SHOWPID);
+        $this->log(LogLevel::DEBUG, "[{pid}] App exited with status: {$runSuccess}");
 
         // If this was not a controlled exit
         $exitCode = 0;
         switch ($runSuccess) {
             case self::APP_EXIT_EXIT:
-                $this->log(Daemon::LOG_L_THREAD, " Halting from error condition...", Daemon::LOG_O_SHOWPID);
+                $this->log(LogLevel::DEBUG, "[{pid}] Halting from error condition...");
                 $exitCode = 8;
                 break;
 
             case self::APP_EXIT_HALT:
-                $this->log(Daemon::LOG_L_THREAD, " Halting from normal operation...", Daemon::LOG_O_SHOWPID);
+                $this->log(LogLevel::DEBUG, "[{pid}] Halting from normal operation...");
                 $exitCode = 0;
                 break;
 
             case self::APP_EXIT_RESTART:
-                $this->log(Daemon::LOG_L_THREAD, " Gracefully exiting (cron restart)...", Daemon::LOG_O_SHOWPID);
+                $this->log(LogLevel::DEBUG, "[{pid}] Gracefully exiting (cron restart)...");
                 $exitCode = 2;
                 break;
 
             case self::APP_EXIT_RELOAD:
             default:
-                $this->log(Daemon::LOG_L_THREAD, " Preparing to reload...", Daemon::LOG_O_SHOWPID);
+                $this->log(LogLevel::DEBUG, "[{pid}] Preparing to reload...");
                 $exitCode = 1;
                 break;
         }
@@ -682,7 +660,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $realm = val('parent', $modes[$mode]);
 
             // Parent
-            $this->log(Daemon::LOG_L_THREAD, " Parent ({$realm})", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::DEBUG, "[{pid}] Parent ({$realm})");
 
             // Record child PID
             $childRealm = val('child', $modes[$mode]);
@@ -696,24 +674,24 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $this->realm = val('child', $modes[$mode]);
 
             // Child
-            $this->log(Daemon::LOG_L_THREAD, " Child ({$this->realm})", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::DEBUG, "[{pid}] Child ({$this->realm})");
 
             // Re-lock process
             if ($lock) {
-                $this->log(Daemon::LOG_L_THREAD, " - locking child process", Daemon::LOG_O_SHOWPID);
+                $this->log(LogLevel::DEBUG, "[{pid}] - locking child process");
                 $locked = $this->lock->lock();
                 if (!$locked) {
-                    $this->log(Daemon::LOG_L_WARN, "Unable to lock forked process", Daemon::LOG_O_SHOWPID);
+                    $this->log(Daemon::LOG_L_WARN, "[{pid}] Unable to lock forked process");
                     exit;
                 }
             }
 
-            $this->log(Daemon::LOG_L_THREAD, " Configuring child process ({$this->realm})", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::DEBUG, "[{pid}] Configuring child process ({$this->realm})");
 
             // Detach
-            $this->log(Daemon::LOG_L_THREAD, "  - detach from console", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::DEBUG, "[{pid}]  - detach from console");
             if (posix_setsid() == -1) {
-                $this->log(Daemon::LOG_L_THREAD, " Unable to detach from the terminal window", Daemon::LOG_O_SHOWPID);
+                $this->log(LogLevel::DEBUG, "[{pid}] Unable to detach from the terminal window");
                 exit;
             }
 
@@ -728,9 +706,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $sysSetegid = posix_setegid($sysGID);
                         $sysSetegid = $sysSetegid ? 'success' : 'failed';
                     }
-                    $this->log(Daemon::LOG_L_THREAD, "  - setegid... {$sysSetegid}", Daemon::LOG_O_SHOWPID);
+                    $this->log(LogLevel::DEBUG, "[{pid}]  - setegid... {$sysSetegid}");
                 } else {
-                    $this->log(Daemon::LOG_L_THREAD, "  - setegid, no such group '{$sysGroup}'");
+                    $this->log(LogLevel::DEBUG, "[{pid}]  - setegid, no such group '{$sysGroup}'");
                 }
             }
 
@@ -743,14 +721,14 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $sysSeteuid = posix_seteuid($sysUID);
                         $sysSeteuid = $sysSeteuid ? 'success' : 'failed';
                     }
-                    $this->log(Daemon::LOG_L_THREAD, "  - seteuid... {$sysSeteuid}", Daemon::LOG_O_SHOWPID);
+                    $this->log(LogLevel::DEBUG, "[{pid}]  - seteuid... {$sysSeteuid}");
                 } else {
-                    $this->log(Daemon::LOG_L_THREAD, "  - seteuid, no such user '{$sysUser}'");
+                    $this->log(LogLevel::DEBUG, "[{pid}]  - seteuid, no such user '{$sysUser}'");
                 }
             }
 
             // Close resources
-            //$this->log(Daemon::LOG_L_THREAD, "  - close fds", Daemon::LOG_O_SHOWPID);
+            //$this->log(LogLevel::DEBUG, "  - close fds", Daemon::LOG_O_SHOWPID);
             //fclose(STDIN);
             //fclose(STDOUT);
             //fclose(STDERR);
@@ -759,7 +737,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         } else {
 
             // Failed
-            $this->log(Daemon::LOG_L_FATAL, "  Failed to fork process", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::ERROR, "[{pid}]  Failed to fork process");
             exit(1);
         }
     }
@@ -767,10 +745,10 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /**
      * Catch signals
      *
-     * @param integer $signal
+     * @param int $signal
      */
     public function signal($signal) {
-        $this->log(Daemon::LOG_L_THREAD, "Caught signal '{$signal}'", Daemon::LOG_O_SHOWPID);
+        $this->log(LogLevel::DEBUG, "[{pid}] Caught signal '{$signal}'");
 
         switch ($signal) {
 
@@ -834,8 +812,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /**
      * Recover a fleet worker
      *
-     * @param integer $pid
-     * @param
+     * @param int $pid
+     * @param int $status
      */
     protected function land($pid, $status = null) {
         // One of ours?
@@ -851,18 +829,19 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $workerType = val($pid, $this->children);
             unset($this->children[$pid]);
             $fleetSize = $this->fleetSize();
-            $this->log(Daemon::LOG_L_THREAD, "Landing fleet '{$workerType}' with PID {$pid} ({$fleetSize} still in the air)", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::DEBUG, "[{pid}] Landing fleet '{$workerType}' with PID {$pid} ({$fleetSize} still in the air)");
         }
     }
 
     /**
      * Kill all children and return
      *
+     * @return bool
      */
-    protected function genocide() {
+    protected function genocide(): bool {
         static $killing = false;
         if (!$killing) {
-            $this->log(Daemon::LOG_L_THREAD, "Shutting down fleet operations...", Daemon::LOG_O_SHOWPID);
+            $this->log(LogLevel::DEBUG, "[{pid}] Shutting down fleet operations...");
             $killing = true;
             foreach ($this->children as $childpid => $childtype) {
                 posix_kill($childpid, SIGKILL);
@@ -892,9 +871,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @param string $time
      * @param string $format
-     * @return DateTime
+     * @return \DateTimeInterface
      */
-    public static function time($time = 'now', $format = null) {
+    public static function time(string $time = 'now', string $format = null): \DateTimeInterface {
         $timezone = new \DateTimeZone('utc');
 
         if (is_null($format)) {
@@ -908,6 +887,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
     /**
      * Get a logger
+     *
      * @return \Psr\Log\LoggerInterface
      */
     public function getLogger() {
@@ -920,26 +900,27 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     /**
      * Output to log (screen or file or both)
      *
-     * @param integer $level event level
+     * @param string $level logger event level
      * @param string $message
-     * @param type $options
+     * @param array $context optional.
+     * @param type $options optional.
      */
-    public function log($level, $message, $options = 0) {
+    public function log(string $level, string $message, array $context = [], integer $options = 1) {
         $format = '';
-        $level = (int)$level;
-        $logPriority = $this->loggerPriority($level);
+        $priority = $this->levelPriority($level);
 
-        $context = [
-            'priority' => $logPriority,
+        if (!is_array($context)) {
+            $context = [];
+        }
+        $context = array_merge([
+            'priority' => $priority,
             'pid' => posix_getpid(),
             'time' => Daemon::time('now')->format('Y-m-d H:i:s'),
             'message' => $message
-        ];
+        ], $context);
 
-        if ($this->logLevel & $level || $this->logLevel == -1) {
-            if ($options & Daemon::LOG_O_SHOWPID) {
-                $format .= "[{pid}]";
-            }
+        $loggingPriority = $this->levelPriority($level);
+        if ($this->logLevel == -1 || ($this->logLevel && $this->logLevel >= $loggingPriority)) {
 
             if ($options & Daemon::LOG_O_SHOWTIME) {
                 $format .= "[{time}]";
@@ -947,37 +928,41 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
             // Pad output if there are tags
             if (strlen($format)) {
-                $format .= ' ';
+                $format .= " ";
             }
 
             $format .= '{message}';
-            if (!($options & Daemon::LOG_O_NONEWLINE)) {
-                $format .= "\n";
-            }
 
-            $this->getLogger()->log($logPriority, $format, $context);
+            $this->getLogger()->log($level, $format, $context);
         }
     }
 
     /**
-     * Get log level
+     * Get the numeric priority for a log level.
      *
-     * @param integer $level
-     * @retun string
+     * The priorities are set to the LOG_* constants from the {@link syslog()} function.
+     * A lower number is more severe.
+     *
+     * @param string|int $level The string log level or an actual priority.
+     * @return int Returns the numeric log level or `8` if the level is invalid.
      */
-    protected function loggerPriority($level) {
-        $levels = [
-            self::LOG_L_FATAL   => LogLevel::ERROR,
-            self::LOG_L_WARN    => LogLevel::WARNING,
-            self::LOG_L_NOTICE  => LogLevel::NOTICE,
-            self::LOG_L_INFO    => LogLevel::INFO,
-            self::LOG_L_THREAD  => LogLevel::INFO,
-            self::LOG_L_APP     => LogLevel::INFO,
-            self::LOG_L_EVENT   => LogLevel::INFO,
-            self::LOG_L_API     => LogLevel::INFO
+    public function levelPriority(string $level): int {
+        static $priorities = [
+            LogLevel::DEBUG     => LOG_DEBUG,
+            LogLevel::INFO      => LOG_INFO,
+            LogLevel::NOTICE    => LOG_NOTICE,
+            LogLevel::WARNING   => LOG_WARNING,
+            LogLevel::ERROR     => LOG_ERR,
+            LogLevel::CRITICAL  => LOG_CRIT,
+            LogLevel::ALERT     => LOG_ALERT,
+            LogLevel::EMERGENCY => LOG_EMERG
         ];
 
-        return $levels[$level] ?? LogLevel::INFO;
+        if (isset($priorities[$level])) {
+            return $priorities[$level];
+        } else {
+            return LOG_DEBUG + 1;
+        }
     }
 
     /**
@@ -985,8 +970,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @param string $format
      * @param array $context optional. array of key-value pairs to replace into the format.
+     * @return string
      */
-    protected function interpolateContext($format, $context = []) {
+    protected function interpolateContext(string $format, array $context = []): string {
         $final = preg_replace_callback('/{([^\s][^}]+[^\s]?)}/', function ($matches) use ($context) {
             $field = trim($matches[1], '{}');
             if (array_key_exists($field, $context)) {
