@@ -234,6 +234,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 ->description('Install command symlink to /usr/bin');
 
         $application = $this->getInstance();
+        $application->preflight($this->cli);
 
         // Parse CLI
         $this->args = $this->cli->parse($arguments, true);
