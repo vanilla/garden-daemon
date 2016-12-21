@@ -216,6 +216,11 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
         // Prepare global CLI
 
+        $this->log(LogLevel::INFO, "{app} v{version}", [
+            'app'       => APP,
+            'version'   => APP_VERSION
+        ]);
+
         $this->cli
             ->description($appDescription)
             ->meta('filename', $appName)
@@ -276,7 +281,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                         // Check if it's still running
                         if ($this->lock->isProcessRunning($runPid)) {
-                            $this->log(LogLevel::WARNING, ' - unable to stop daemon');
+                            $this->log(LogLevel::WARNING, 'unable to stop daemon');
                             return 1;
                         }
                     }
@@ -289,7 +294,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     }
                     throw new Exception(" - {$message}", 500);
                 } else {
-                    $this->log(LogLevel::WARNING, ' - restarting...');
+                    $this->log(LogLevel::WARNING, 'restarting...');
                 }
 
             // Start daemon
@@ -307,7 +312,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $watchdog = $this->args->getOpt('watchdog');
                         $code = $watchdog ? 0 : 1;
 
-                        $this->log(LogLevel::INFO, " - already running");
+                        $this->log(LogLevel::INFO, 'already running');
                         return $code;
                     }
                 }
@@ -317,12 +322,17 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $user = posix_getpwuid($uid);
                 $this->set('user', $user);
 
+                $this->log(LogLevel::DEBUG, "running as {user} (uid {uid})", [
+                    'uid'   => $uid,
+                    'user'  => $user['name']
+                ]);
+
                 // Make sure we can do our things
                 $sysUser = $this->get('runasuser', null);
                 $sysGroup = $this->get('runasgroup', null);
                 if ($sysUser || $sysGroup) {
-                    if ($user != 'root') {
-                        $this->log(LogLevel::ERROR, ' - must be running as root to setegid() or seteuid()');
+                    if ($user['uid'] != 0) {
+                        $this->log(LogLevel::ERROR, 'must be running as root to setegid() or seteuid()');
                         return 1;
                     }
                 }
@@ -335,18 +345,19 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                     // Console returns 0
                     if ($realm == 'console') {
-                        $this->log(LogLevel::DEBUG, "[{pid}] - parent exited normally");
+                        $this->log(LogLevel::DEBUG, "[{pid}]   console detached, parent exiting");
                         return 0;
                     }
 
-                    // We are now a forked daemon
-                    $this->initialize();
-
                 } else {
 
-                    $this->log(LogLevel::DEBUG, "[{pid}] will not go into background");
+                    $this->log(LogLevel::DEBUG, "[{pid}] Will not go into background");
                     $this->realm = 'daemon';
+
                 }
+
+                // We are now a daemon (or just faking it)
+                $this->initialize();
 
                 // Daemon returns execution to the main file
                 $this->daemonPid = posix_getpid();
@@ -372,14 +383,14 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     case self::MODE_SINGLE:
 
                         // Run app
-                        $this->runApp();
+                        $this->runModeSingle();
 
                         break;
 
                     case self::MODE_FLEET:
 
                         // Launch and maintain fleet
-                        $this->loiter();
+                        $this->runModeFleet();
 
                         break;
                 }
@@ -451,6 +462,126 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     }
 
     /**
+     * Fork into the background
+     *
+     * @param string $mode return realm label provider
+     * @param bool $lock optional. false gives no lock protection, true re-locks on $this->lock
+     */
+    protected function fork(string $mode, bool $lock = false) {
+
+        $modes = [
+            'daemon' => [
+                'parent' => 'console',
+                'child' => 'daemon'
+            ],
+            'fleet' => [
+                'parent' => 'daemon',
+                'child' => 'worker'
+            ]
+        ];
+        if (!array_key_exists($mode, $modes)) {
+            return false;
+        }
+
+        // Fork
+        $pid = pcntl_fork();
+
+        // Realm splitting
+        if ($pid > 0) {
+
+            $realm = val('parent', $modes[$mode]);
+
+            // Parent
+            $this->log(LogLevel::DEBUG, "[{pid}] Parent ({$realm})");
+
+            // Record child PID
+            $childRealm = val('child', $modes[$mode]);
+            $this->children[$pid] = $childRealm;
+
+            // Return as parent
+            return $realm;
+
+        } else if ($pid == 0) {
+
+            $this->realm = val('child', $modes[$mode]);
+
+            // Child
+            $this->log(LogLevel::DEBUG, "[{pid}] Child ({$this->realm})");
+
+            // Re-lock process
+            if ($lock) {
+                $this->log(LogLevel::DEBUG, "[{pid}]   locking child process");
+                $locked = $this->lock->lock();
+                if (!$locked) {
+                    $this->log(Daemon::LOG_L_WARN, "[{pid}] Unable to lock forked process");
+                    exit;
+                }
+            }
+
+            // Detach
+            $this->log(LogLevel::DEBUG, "[{pid}]   detach from {parent}", [
+                'parent' => $modes[$mode]['parent']
+            ]);
+            if (posix_setsid() == -1) {
+                $this->log(LogLevel::DEBUG, "[{pid}] Unable to detach from {parent}", [
+                    'parent' => $modes[$mode]['parent']
+                ]);
+                exit;
+            }
+
+            // SETGID/SETUID
+            $sysGroup = $this->get('runasgroup', null);
+            if (!is_null($sysGroup)) {
+
+                $sysGroupInfo = posix_getgrnam($sysGroup);
+                if (is_array($sysGroupInfo)) {
+                    $sysGID = val('gid', $sysGroupInfo, null);
+                    if (!is_null($sysGID)) {
+                        $sysSetegid = posix_setegid($sysGID);
+                        $sysSetegid = $sysSetegid ? 'success' : 'failed';
+                    }
+                    $this->log(LogLevel::DEBUG, "[{pid}]   setegid... {$sysSetegid}");
+                } else {
+                    $this->log(LogLevel::WARN, "[{pid}]   setegid, no such group '{$sysGroup}'");
+                }
+            }
+
+            $sysUser = $this->get('runasuser', null);
+            if (!is_null($sysUser)) {
+                $sysUserInfo = posix_getpwnam($sysUser);
+                if (is_array($sysUserInfo)) {
+                    $sysUID = val('uid', $sysUserInfo, null);
+                    if (!is_null($sysUID)) {
+                        $sysSeteuid = posix_seteuid($sysUID);
+                        $sysSeteuid = $sysSeteuid ? 'success' : 'failed';
+                    }
+                    $this->log(LogLevel::DEBUG, "[{pid}]   seteuid... {$sysSeteuid}");
+                } else {
+                    $this->log(LogLevel::WARN, "[{pid}]   seteuid, no such user '{$sysUser}'");
+                }
+            }
+
+            // Close resources
+            /*
+            $this->log(LogLevel::DEBUG, "[{pid}]   close console I/O");
+            fclose(STDIN);
+            fclose(STDOUT);
+            fclose(STDERR);
+*/
+
+            // Return as child
+            return $this->realm;
+
+        } else {
+
+            // Failed
+            $this->log(LogLevel::ERROR, "[{pid}] Failed to fork process");
+            exit(1);
+
+        }
+    }
+
+    /**
      * Instantiate and coordinate
      *
      * If 'coordinate' is true, we need to create an instance of the payload
@@ -471,24 +602,29 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     }
 
     /**
-     * Dismiss coordinator
+     * Run mode: single
      *
-     * @internal POST LOITER
+     * Run application instance as a daemon, returning when the app finishes.
+     *
      */
-    protected function dismiss() {
-        $this->getInstance();
+    protected function runModeSingle() {
+        $this->log(LogLevel::INFO, "[{pid}] Running application: single");
 
-        if (!is_null($this->instance) && method_exists($this->instance, 'dismiss')) {
-            $this->instance->dismiss();
-        }
+        // Sleep for 2 seconds
+        sleep(2);
+
+        $this->runApp();
     }
 
     /**
-     * Loiter, launching fleet and waiting for them to land
+     * Run mode: fleet
+     *
+     * Loiter, launching fleet workers and waiting for them to land. Cycle until
+     * launching is disabled.
      *
      */
-    protected function loiter() {
-        $this->log(LogLevel::DEBUG, "[{pid}]  Entering loiter cycle for fleet");
+    protected function runModeFleet() {
+        $this->log(LogLevel::INFO, "[{pid}] Running application: fleet");
 
         // Sleep for 2 seconds
         sleep(2);
@@ -496,7 +632,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $this->exitMode = $this->get('exitmode', 'success');
 
         $maxFleetSize = $this->get('fleet', 1);
-        $this->log(LogLevel::DEBUG, "[{pid}]  Launching fleet with {$maxFleetSize} workers");
+        $this->log(LogLevel::INFO, "[{pid}] Launching worker fleet with {$maxFleetSize} workers");
         do {
 
             // Launch workers until the fleet is deployed
@@ -528,7 +664,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $fleetSize++;
                     } else {
                         if ($launched === false) {
-                            $this->log(LogLevel::DEBUG, "[{pid}]   Failed to launch worker, moving on to cleanup");
+                            $this->log(LogLevel::WARN, "[{pid}] Failed to launch worker, moving on to cleanup");
                         }
                     }
                 } while ($launched && $fleetSize < $maxFleetSize);
@@ -547,7 +683,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
             $fleetSize = $this->fleetSize();
             $launching = $this->get('launching', true) ? 'on' : 'off';
-            $this->log(LogLevel::DEBUG, "[{pid}]   Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}");
+            $this->log(LogLevel::DEBUG, "[{pid}] Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}");
 
             // Wait a little (dont tightloop)
             sleep(1);
@@ -567,7 +703,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @return bool
      */
     protected function launch(): bool {
-        $this->log(LogLevel::DEBUG, "[{pid}]  Launching fleet worker");
+        $this->log(LogLevel::DEBUG, "[{pid}]   launching fleet worker");
 
         // Prepare current state priot to forking
         if (!is_null($this->instance) && method_exists($this->instance, 'prepareProcess')) {
@@ -599,7 +735,20 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     }
 
     /**
-     * Run application
+     * Dismiss coordinator
+     *
+     * @internal POST LOITER
+     */
+    protected function dismiss() {
+        $this->getInstance();
+
+        if (!is_null($this->instance) && method_exists($this->instance, 'dismiss')) {
+            $this->instance->dismiss();
+        }
+    }
+
+    /**
+     * Run application worker
      *
      * @internal POST FORK, POST FLEET
      * @return int
@@ -644,120 +793,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 break;
         }
         return $exitCode;
-    }
-
-    /**
-     * Fork into the background
-     *
-     * @param string $mode return realm label provider
-     * @param bool $lock optional. false gives no lock protection, true re-locks on $this->lock
-     */
-    protected function fork(string $mode, bool $lock = false) {
-        
-        $modes = [
-            'daemon' => [
-                'parent' => 'console',
-                'child' => 'daemon'
-            ],
-            'fleet' => [
-                'parent' => 'daemon',
-                'child' => 'worker'
-            ]
-        ];
-        if (!array_key_exists($mode, $modes)) {
-            return false;
-        }
-
-        // Fork
-        $pid = pcntl_fork();
-
-        // Realm splitting
-        if ($pid > 0) {
-
-            $realm = val('parent', $modes[$mode]);
-
-            // Parent
-            $this->log(LogLevel::DEBUG, "[{pid}] Parent ({$realm})");
-
-            // Record child PID
-            $childRealm = val('child', $modes[$mode]);
-            $this->children[$pid] = $childRealm;
-
-            // Return as parent
-            return $realm;
-
-        } else if ($pid == 0) {
-
-            $this->realm = val('child', $modes[$mode]);
-
-            // Child
-            $this->log(LogLevel::DEBUG, "[{pid}] Child ({$this->realm})");
-
-            // Re-lock process
-            if ($lock) {
-                $this->log(LogLevel::DEBUG, "[{pid}] - locking child process");
-                $locked = $this->lock->lock();
-                if (!$locked) {
-                    $this->log(Daemon::LOG_L_WARN, "[{pid}] Unable to lock forked process");
-                    exit;
-                }
-            }
-
-            $this->log(LogLevel::DEBUG, "[{pid}] Configuring child process ({$this->realm})");
-
-            // Detach
-            $this->log(LogLevel::DEBUG, "[{pid}]  - detach from console");
-            if (posix_setsid() == -1) {
-                $this->log(LogLevel::DEBUG, "[{pid}] Unable to detach from the terminal window");
-                exit;
-            }
-
-            // SETGID/SETUID
-            $sysGroup = $this->get('runasgroup', null);
-            if (!is_null($sysGroup)) {
-
-                $sysGroupInfo = posix_getgrnam($sysGroup);
-                if (is_array($sysGroupInfo)) {
-                    $sysGID = val('gid', $sysGroupInfo, null);
-                    if (!is_null($sysGID)) {
-                        $sysSetegid = posix_setegid($sysGID);
-                        $sysSetegid = $sysSetegid ? 'success' : 'failed';
-                    }
-                    $this->log(LogLevel::DEBUG, "[{pid}]  - setegid... {$sysSetegid}");
-                } else {
-                    $this->log(LogLevel::DEBUG, "[{pid}]  - setegid, no such group '{$sysGroup}'");
-                }
-            }
-
-            $sysUser = $this->get('runasuser', null);
-            if (!is_null($sysUser)) {
-                $sysUserInfo = posix_getpwnam($sysUser);
-                if (is_array($sysUserInfo)) {
-                    $sysUID = val('uid', $sysUserInfo, null);
-                    if (!is_null($sysUID)) {
-                        $sysSeteuid = posix_seteuid($sysUID);
-                        $sysSeteuid = $sysSeteuid ? 'success' : 'failed';
-                    }
-                    $this->log(LogLevel::DEBUG, "[{pid}]  - seteuid... {$sysSeteuid}");
-                } else {
-                    $this->log(LogLevel::DEBUG, "[{pid}]  - seteuid, no such user '{$sysUser}'");
-                }
-            }
-
-            // Close resources
-            //$this->log(LogLevel::DEBUG, "[{pid}]  - close fds");
-            //fclose(STDIN);
-            //fclose(STDOUT);
-            //fclose(STDERR);
-
-            // Return as child
-            return $this->realm;
-        } else {
-
-            // Failed
-            $this->log(LogLevel::ERROR, "[{pid}]  Failed to fork process");
-            exit(1);
-        }
     }
 
     /**
@@ -933,13 +968,12 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $context = array_merge([
             'priority' => $priority,
             'pid' => posix_getpid(),
-            'time' => Daemon::time('now')->format('Y-m-d H:i:s'),
-            'message' => $message
+            'time' => Daemon::time('now')->format('Y-m-d H:i:s')
         ], $context);
 
-        $loggingPriority = $this->levelPriority($level);
-        if ($this->logLevel == -1 || ($this->logLevel && $this->logLevel >= $loggingPriority)) {
-
+        $loggingPriority = $this->levelPriority($this->logLevel);
+        
+        if ($this->logLevel == -1 || ($loggingPriority && $loggingPriority >= $priority)) {
             if ($options & Daemon::LOG_O_SHOWTIME) {
                 $format .= "[{time}]";
             }
@@ -949,7 +983,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $format .= " ";
             }
 
-            $format .= '{message}';
+            $format .= $message;
 
             $this->getLogger()->log($level, $format, $context);
         }
