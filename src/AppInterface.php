@@ -19,11 +19,12 @@ interface AppInterface {
      * Run just before parsing the CLI
      *
      * @param \Garden\Cli\Cli $cli
+     * @param \Kaecyra\AppCommon\Config $config
      */
-    public function preflight(\Garden\Cli\Cli $cli);
+    public function preflight(\Garden\Cli\Cli $cli, \Kaecyra\AppCommon\Config $config);
 
     /**
-     * The first thing we run after forking into our daemon
+     * The first thing we run after forking into our daemon process
      *
      * @param \Garden\Cli\Args $args
      */

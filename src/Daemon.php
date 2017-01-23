@@ -239,10 +239,11 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 ->description('Install command symlink to /usr/bin');
 
         $application = $this->getInstance();
-        $application->preflight($this->cli);
+        $this->di->call([$application, 'preflight']);
 
         // Parse CLI
         $this->args = $this->cli->parse($arguments, true);
+        $this->di->setInstance(Args::class, $this->args);
         $this->set('args', $this->args);
 
         $command = $this->args->getCommand();
@@ -397,7 +398,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                 // Dismiss payload
                 if ($sysCoordinate) {
-                    $this->dismiss();
+                    $this->dismissCoordinator();
                 }
 
                 // Pipe exit code to wrapper file
@@ -431,13 +432,14 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         declare (ticks = 100);
 
         // Install signal handlers
-        pcntl_signal(SIGHUP, array($this, 'signal'));
-        pcntl_signal(SIGINT, array($this, 'signal'));
-        pcntl_signal(SIGTERM, array($this, 'signal'));
-        pcntl_signal(SIGCHLD, array($this, 'signal'));
+        pcntl_signal(SIGHUP, array($this, 'handleSignal'));
+        pcntl_signal(SIGINT, array($this, 'handleSignal'));
+        pcntl_signal(SIGTERM, array($this, 'handleSignal'));
+        pcntl_signal(SIGCHLD, array($this, 'handleSignal'));
 
         // Inform app that we've formed
-        $this->getInstance()->initialize($this->args);
+        //$this->getInstance()->initialize($this->args);
+        $this->di->call([$this->getInstance(), 'initialize']);
     }
 
     /**
@@ -613,7 +615,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         // Sleep for 2 seconds
         sleep(2);
 
-        $this->runApp();
+        $this->runPayloadApplication();
     }
 
     /**
@@ -642,7 +644,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     if ($fleetSize >= $maxFleetSize) {
                         break;
                     }
-                    $launched = $this->launch();
+                    $launched = $this->launchFleetWorker();
 
                     // If a child gets through, terminate as a failure
                     if ($this->realm != 'daemon') {
@@ -702,7 +704,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @return bool
      */
-    protected function launch(): bool {
+    protected function launchFleetWorker(): bool {
         $this->log(LogLevel::DEBUG, "[{pid}]   launching fleet worker");
 
         // Prepare current state priot to forking
@@ -730,7 +732,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         pcntl_signal(SIGTERM, SIG_DFL);
         pcntl_signal(SIGCHLD, SIG_DFL);
 
-        $exitCode = $this->runApp();
+        $exitCode = $this->runPayloadApplication();
         exit($exitCode);
     }
 
@@ -739,11 +741,11 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @internal POST LOITER
      */
-    protected function dismiss() {
+    protected function dismissCoordinator() {
         $this->getInstance();
 
         if (!is_null($this->instance) && method_exists($this->instance, 'dismiss')) {
-            $this->instance->dismiss();
+            $this->instance->dismissCoordinator();
         }
     }
 
@@ -753,7 +755,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @internal POST FORK, POST FLEET
      * @return int
      */
-    protected function runApp(): int {
+    protected function runPayloadApplication(): int {
         $this->getInstance();
 
         try {
@@ -800,7 +802,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @param int $signal
      */
-    public function signal(int $signal) {
+    public function handleSignal(int $signal) {
         $this->log(LogLevel::DEBUG, "[{pid}] Caught signal '{$signal}'");
 
         switch ($signal) {
@@ -972,7 +974,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         ], $context);
 
         $loggingPriority = $this->levelPriority($this->logLevel);
-        
+
         if ($this->logLevel == -1 || ($loggingPriority && $loggingPriority >= $priority)) {
             if ($options & Daemon::LOG_O_SHOWTIME) {
                 $format .= "[{time}]";
