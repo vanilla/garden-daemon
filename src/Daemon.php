@@ -544,7 +544,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     }
                     $this->log(LogLevel::DEBUG, "[{pid}]   setegid... {$sysSetegid}");
                 } else {
-                    $this->log(LogLevel::WARN, "[{pid}]   setegid, no such group '{$sysGroup}'");
+                    $this->log(LogLevel::WARNING, "[{pid}]   setegid, no such group '{$sysGroup}'");
                 }
             }
 
@@ -569,7 +569,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             fclose(STDIN);
             fclose(STDOUT);
             fclose(STDERR);
-*/
+            */
 
             // Return as child
             return $this->realm;
