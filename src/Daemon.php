@@ -35,8 +35,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
     use LoggerAwareTrait;
 
-    const MODE_SINGLE = 'single';
-    const MODE_FLEET = 'fleet';
+    const MODE_SINGLE           = 'single';
+    const MODE_FLEET            = 'fleet';
 
     const APP_EXIT_HALT         = 'halt';       // ok
     const APP_EXIT_EXIT         = 'exit';       // error
@@ -238,8 +238,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             ->command('install')
                 ->description('Install command symlink to /usr/bin');
 
-        $application = $this->getInstance();
-        $this->di->call([$application, 'preflight']);
+        // Allow payload application to influence CLI
+        $this->preflightPayload();
 
         // Parse CLI
         $this->args = $this->cli->parse($arguments, true);
@@ -357,8 +357,14 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                 }
 
-                // We are now a daemon (or just faking it)
-                $this->initialize();
+                /*
+                 * Initialize after daemonizing
+                 *
+                 * Daemon needs to attach signal handlers and set the tick rate.
+                 * Also a good place to any other tasks that need to happen as
+                 * soon as we know we're actually starting up.
+                 */
+                $this->initializeDaemon();
 
                 // Daemon returns execution to the main file
                 $this->daemonPid = posix_getpid();
@@ -373,12 +379,21 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $terminal = str_replace('/dev/', '', $terminal);
                 $this->set('itty', $terminal);
 
-                // Coordinate fleet
-                $sysCoordinate = $this->get('coordinate', false);
-                if ($sysCoordinate) {
-                    $this->coordinate();
-                }
+                /*
+                 * Initialize payload
+                 *
+                 * Payload process needs to know that things are running. This
+                 * gives it a chance to adjust logging, inspect command line
+                 * arguments, etc.
+                 */
+                $this->initializePayload();
 
+                /*
+                 * Run the payload
+                 *
+                 * Depending on daemon mode, run the payload application as a
+                 * single background process, or as a worker fleet.
+                 */
                 $sysMode = $this->get('mode', self::MODE_SINGLE);
                 switch ($sysMode) {
                     case self::MODE_SINGLE:
@@ -397,9 +412,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 }
 
                 // Dismiss payload
-                if ($sysCoordinate) {
-                    $this->dismissCoordinator();
-                }
+                $this->dismissPayload();
 
                 // Pipe exit code to wrapper file
                 $exitCode = $this->exit;
@@ -410,8 +423,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $exitHandled = null;
 
                 // Hand off control to app
-                if (method_exists($application, 'cli')) {
-                    $exitHandled = call_user_func([$application, 'cli'], $this->args);
+                if (method_exists($this->getPayloadInstance(), 'cli')) {
+                    $exitHandled = $this->di->call([$this->getPayloadInstance(), 'cli'], [$this->args]);
                 }
 
                 // Command not handled by app
@@ -428,7 +441,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * Post-daemonize initialization
      *
      */
-    protected function initialize() {
+    protected function initializeDaemon() {
         declare (ticks = 100);
 
         // Install signal handlers
@@ -436,10 +449,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         pcntl_signal(SIGINT, array($this, 'handleSignal'));
         pcntl_signal(SIGTERM, array($this, 'handleSignal'));
         pcntl_signal(SIGCHLD, array($this, 'handleSignal'));
-
-        // Inform app that we've formed
-        //$this->getInstance()->initialize($this->args);
-        $this->di->call([$this->getInstance(), 'initialize']);
     }
 
     /**
@@ -447,7 +456,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @return AppInterface
      */
-    protected function getInstance(): AppInterface {
+    protected function getPayloadInstance(): AppInterface {
         if (!($this->instance instanceof AppInterface)) {
             $appName = $this->get('appname', null);
             $appNamespace = $this->get('appnamespace', null);
@@ -461,6 +470,321 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $this->instance = $this->di->get($appClassName);
         }
         return $this->instance;
+    }
+
+    /**
+     * Runtime environment config for payload
+     *
+     * Allow payload application to influence CLI arguments, and read from the
+     * config.
+     *
+     * @internal PRE FORK
+     */
+    protected function preflightPayload() {
+        $this->getPayloadInstance();
+
+        if (method_exists($this->instance, 'preflight')) {
+            $this->di->call([$this->instance, 'preflight']);
+        }
+    }
+
+    /**
+     * Initialize payload
+     *
+     * Just prior to forking the fleet (or single process), initialize the
+     * payload.
+     *
+     * @internal POST FORK, PRE LOITER
+     */
+    protected function initializePayload() {
+        $this->getPayloadInstance();
+
+        if (method_exists($this->instance, 'initialize')) {
+            $this->di->call([$this->instance, 'initialize']);
+        }
+    }
+
+    /**
+     * Dismiss payload
+     *
+     * @internal POST LOITER
+     */
+    protected function dismissPayload() {
+        $this->getPayloadInstance();
+
+        if (method_exists($this->instance, 'dismiss')) {
+            $this->di->call([$this->instance, 'dismiss']);
+        }
+    }
+
+    /**
+     * Request launch override permission
+     *
+     * We use this to allow the payload application to spawn workers even when the fleet
+     * is fully allocated. This can be used to perform queue maintenance.
+     *
+     * @return bool
+     */
+    protected function getLaunchOverride() {
+        $this->getPayloadInstance();
+
+        $launchOverride = false;
+        if (method_exists($this->instance, 'getLaunchOverride')) {
+            $launchOverride = $this->di->call([$this->instance, 'getLaunchOverride']);
+        }
+        return $launchOverride;
+    }
+
+    /**
+     * Get worker config
+     *
+     * @internal MID LOITER
+     * @return array|bool
+     */
+    protected function getWorkerConfig() {
+        $this->getPayloadInstance();
+
+        $workerConfig = true;
+        if (method_exists($this->instance, 'getWorkerConfig')) {
+            $workerConfig = $this->di->call([$this->instance, 'getWorkerConfig']);
+        }
+        return $workerConfig;
+    }
+
+    /**
+     * Run mode: single
+     *
+     * Run application instance as a daemon, returning when the app finishes.
+     *
+     */
+    protected function runModeSingle() {
+        $this->log(LogLevel::INFO, "[{pid}] Running application: single");
+
+        // Sleep for 2 seconds
+        sleep(2);
+
+        $this->runPayloadApplication();
+    }
+
+    /**
+     * Run mode: fleet
+     *
+     * Loiter, launching fleet workers and waiting for them to land. Cycle until
+     * launching is disabled.
+     *
+     */
+    protected function runModeFleet() {
+        $this->log(LogLevel::INFO, "[{pid}] Running application: fleet");
+
+        // Sleep for 2 seconds
+        sleep(2);
+
+        $this->exitMode = $this->get('exitmode', 'success');
+
+        $this->log(LogLevel::INFO, "[{pid}] Launching worker fleet with {fleet} max workers", [
+            'fleet' => $this->getMaxFleetSize()
+        ]);
+
+        // Run launch cycle with "launching" is enabled
+        do {
+
+            if ($this->getIsLaunching() && $this->getMaxFleetSize()) {
+
+                // Launch workers until the fleet is fully deployed
+                do {
+
+                    // Break from launch loop if we've hit max fleet size and there's no launch override
+                    if ($this->getFleetSize() >= $this->getMaxFleetSize() && !$this->launchOverride()) {
+                        break;
+                    }
+
+                    $launched = $this->launchFleetWorker();
+
+                    // If a child gets through, terminate as a failure
+                    if ($this->realm != 'daemon') {
+                        exit(1);
+                    }
+
+                    // Turn off launching if we didn't launch
+                    if (!$launched) {
+                        $this->set('launching', false);
+                    }
+
+                    /*
+                     *
+                     * DAEMON THREAD BELOW
+                     *
+                     */
+
+                    if (!$launched) {
+                        if ($launched === false) {
+                            $this->log(LogLevel::WARN, "[{pid}] Failed to launch worker, moving on to cleanup");
+                        }
+                    }
+                } while ($launched && $this->getFleetSize() < $this->getMaxFleetSize());
+
+            }
+
+            // Allow signals to flow
+            pcntl_signal_dispatch();
+
+            $fleetSize = $this->getFleetSize();
+            $launching = $this->getIsLaunching() ? 'on' : 'off';
+            $this->log(LogLevel::DEBUG, "[{pid}] Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}");
+
+            // Reap exited children
+            $this->reapZombies();
+
+            // Wait a little (dont tightloop)
+            sleep(1);
+
+        } while ($this->getIsLaunching() || $this->getFleetSize());
+
+        // Shut down signal handling in main process
+        pcntl_signal(SIGHUP, SIG_DFL);
+        pcntl_signal(SIGINT, SIG_DFL);
+        pcntl_signal(SIGTERM, SIG_DFL);
+        pcntl_signal(SIGCHLD, SIG_DFL);
+    }
+
+    /**
+     * Allow payload application to override launch
+     */
+    public function launchOverride() {
+
+    }
+
+    /**
+     * Get launching flag
+     *
+     * @return bool
+     */
+    public function getIsLaunching() {
+        return $this->get('launching', true);
+    }
+
+    /**
+     * Set launching flag
+     *
+     * @param bool $launching
+     * @return bool
+     */
+    public function setIsLaunching(bool $launching) {
+        return $this->set('launching', $launching);
+    }
+
+    /**
+     * Get max fleet size
+     *
+     * @return int
+     */
+    public function getMaxFleetSize() {
+        return $this->get('fleet', 1);
+    }
+
+    /**
+     * Set max fleet size
+     *
+     * @param int $fleet
+     * @return int
+     */
+    public function setMaxFleetSize(int $fleet) {
+        return $this->set('fleet', $fleet);
+    }
+
+    /**
+     * Get number of child processes
+     *
+     * @return int
+     */
+    public function getFleetSize(): int {
+        return count($this->children);
+    }
+
+    /**
+     * Launch a fleet worker
+     *
+     * @return bool
+     */
+    protected function launchFleetWorker(): bool {
+        $this->log(LogLevel::DEBUG, "[{pid}]   launching fleet worker");
+
+        // Prepare current state prior to forking
+        $workerConfig = $this->getWorkerConfig();
+        if ($workerConfig === false) {
+            return false;
+        }
+
+        $this->fork('fleet');
+
+        // Return daemon thread
+        if ($this->realm != 'worker') {
+            return true;
+        }
+
+        /*
+         *
+         * WORKER THREADS BELOW
+         *
+         */
+
+        // Workers don't care about signal handling
+        pcntl_signal(SIGHUP, SIG_DFL);
+        pcntl_signal(SIGINT, SIG_DFL);
+        pcntl_signal(SIGTERM, SIG_DFL);
+        pcntl_signal(SIGCHLD, SIG_DFL);
+
+        $exitCode = $this->runPayloadApplication($workerConfig);
+        exit($exitCode);
+    }
+
+    /**
+     * Run application worker
+     *
+     * @internal POST FORK, POST FLEET
+     * @param mixed $workerConfig
+     * @return int
+     */
+    protected function runPayloadApplication($workerConfig = null): int {
+        $this->getPayloadInstance();
+
+        try {
+            $runSuccess = $this->instance->run($workerConfig);
+            unset($this->instance);
+        } catch (Exception $ex) {
+            $exitMessage = $ex->getMessage();
+            $exitFile = $ex->getFile().':'.$ex->getLine();
+            $this->log(LogLevel::ERROR, "[{pid}] App Exception: {$exitMessage} {$exitFile}");
+            return 1;
+        }
+
+        $this->log(LogLevel::DEBUG, "[{pid}] App exited with status: {$runSuccess}");
+
+        // If this was not a controlled exit
+        $exitCode = 0;
+        switch ($runSuccess) {
+            case self::APP_EXIT_EXIT:
+                $this->log(LogLevel::DEBUG, "[{pid}] Halting from error condition...");
+                $exitCode = 8;
+                break;
+
+            case self::APP_EXIT_HALT:
+                $this->log(LogLevel::DEBUG, "[{pid}] Halting from normal operation...");
+                $exitCode = 0;
+                break;
+
+            case self::APP_EXIT_RESTART:
+                $this->log(LogLevel::DEBUG, "[{pid}] Gracefully exiting (cron restart)...");
+                $exitCode = 2;
+                break;
+
+            case self::APP_EXIT_RELOAD:
+            default:
+                $this->log(LogLevel::DEBUG, "[{pid}] Preparing to reload...");
+                $exitCode = 1;
+                break;
+        }
+        return $exitCode;
     }
 
     /**
@@ -584,220 +908,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     }
 
     /**
-     * Instantiate and coordinate
-     *
-     * If 'coordinate' is true, we need to create an instance of the payload
-     * class and execute its 'coordinate' method. This is a situation where the
-     * payload class is acting as a fleet dispatcher for the sysFleet.
-     *
-     * Instead of instantiating payloads after forking, we form with the payload
-     * already prepared.
-     *
-     * @internal POST FORK, PRE FLEET
-     */
-    protected function coordinate() {
-        $this->getInstance();
-
-        if (method_exists($this->instance, 'coordinate')) {
-            $this->instance->coordinate();
-        }
-    }
-
-    /**
-     * Run mode: single
-     *
-     * Run application instance as a daemon, returning when the app finishes.
-     *
-     */
-    protected function runModeSingle() {
-        $this->log(LogLevel::INFO, "[{pid}] Running application: single");
-
-        // Sleep for 2 seconds
-        sleep(2);
-
-        $this->runPayloadApplication();
-    }
-
-    /**
-     * Run mode: fleet
-     *
-     * Loiter, launching fleet workers and waiting for them to land. Cycle until
-     * launching is disabled.
-     *
-     */
-    protected function runModeFleet() {
-        $this->log(LogLevel::INFO, "[{pid}] Running application: fleet");
-
-        // Sleep for 2 seconds
-        sleep(2);
-
-        $this->exitMode = $this->get('exitmode', 'success');
-
-        $maxFleetSize = $this->get('fleet', 1);
-        $this->log(LogLevel::INFO, "[{pid}] Launching worker fleet with {$maxFleetSize} workers");
-        do {
-
-            // Launch workers until the fleet is deployed
-            if ($this->get('launching', true) && $maxFleetSize) {
-                do {
-                    $fleetSize = $this->fleetSize();
-                    if ($fleetSize >= $maxFleetSize) {
-                        break;
-                    }
-                    $launched = $this->launchFleetWorker();
-
-                    // If a child gets through, terminate as a failure
-                    if ($this->realm != 'daemon') {
-                        exit(1);
-                    }
-
-                    // Turn off launching if we didn't launch
-                    if (!$launched) {
-                        $this->set('launching', false);
-                    }
-
-                    /*
-                     *
-                     * DAEMON THREAD BELOW
-                     *
-                     */
-
-                    if ($launched) {
-                        $fleetSize++;
-                    } else {
-                        if ($launched === false) {
-                            $this->log(LogLevel::WARN, "[{pid}] Failed to launch worker, moving on to cleanup");
-                        }
-                    }
-                } while ($launched && $fleetSize < $maxFleetSize);
-            }
-
-            pcntl_signal_dispatch();
-
-            // Clean up any exited children
-            do {
-                $status = null;
-                $pid = pcntl_wait($status, WNOHANG);
-                if ($pid > 0) {
-                    $this->land($pid, $status);
-                }
-            } while ($pid > 0);
-
-            $fleetSize = $this->fleetSize();
-            $launching = $this->get('launching', true) ? 'on' : 'off';
-            $this->log(LogLevel::DEBUG, "[{pid}] Reaping fleet, currently {$fleetSize} outstanding, launching is {$launching}");
-
-            // Wait a little (dont tightloop)
-            sleep(1);
-
-        } while ($this->get('launching', true) || $fleetSize);
-
-        // Shut down signal handling in main process
-        pcntl_signal(SIGHUP, SIG_DFL);
-        pcntl_signal(SIGINT, SIG_DFL);
-        pcntl_signal(SIGTERM, SIG_DFL);
-        pcntl_signal(SIGCHLD, SIG_DFL);
-    }
-
-    /**
-     * Launch a fleet worker
-     *
-     * @return bool
-     */
-    protected function launchFleetWorker(): bool {
-        $this->log(LogLevel::DEBUG, "[{pid}]   launching fleet worker");
-
-        // Prepare current state priot to forking
-        if (!is_null($this->instance) && method_exists($this->instance, 'prepareProcess')) {
-            $canLaunch = $this->instance->prepareProcess();
-            if (!$canLaunch) {
-                return $canLaunch;
-            }
-        }
-
-        $this->fork('fleet');
-        if ($this->realm != 'worker') {
-            return true;
-        }
-
-        /*
-         *
-         * WORKER THREADS BELOW
-         *
-         */
-
-        // Workers don't care about signal handling
-        pcntl_signal(SIGHUP, SIG_DFL);
-        pcntl_signal(SIGINT, SIG_DFL);
-        pcntl_signal(SIGTERM, SIG_DFL);
-        pcntl_signal(SIGCHLD, SIG_DFL);
-
-        $exitCode = $this->runPayloadApplication();
-        exit($exitCode);
-    }
-
-    /**
-     * Dismiss coordinator
-     *
-     * @internal POST LOITER
-     */
-    protected function dismissCoordinator() {
-        $this->getInstance();
-
-        if (!is_null($this->instance) && method_exists($this->instance, 'dismiss')) {
-            $this->instance->dismissCoordinator();
-        }
-    }
-
-    /**
-     * Run application worker
-     *
-     * @internal POST FORK, POST FLEET
-     * @return int
-     */
-    protected function runPayloadApplication(): int {
-        $this->getInstance();
-
-        try {
-            $runSuccess = $this->instance->run();
-            unset($this->instance);
-        } catch (Exception $ex) {
-            $exitMessage = $ex->getMessage();
-            $exitFile = $ex->getFile().':'.$ex->getLine();
-            $this->log(LogLevel::ERROR, "[{pid}] App Exception: {$exitMessage} {$exitFile}");
-            return 1;
-        }
-
-        $this->log(LogLevel::DEBUG, "[{pid}] App exited with status: {$runSuccess}");
-
-        // If this was not a controlled exit
-        $exitCode = 0;
-        switch ($runSuccess) {
-            case self::APP_EXIT_EXIT:
-                $this->log(LogLevel::DEBUG, "[{pid}] Halting from error condition...");
-                $exitCode = 8;
-                break;
-
-            case self::APP_EXIT_HALT:
-                $this->log(LogLevel::DEBUG, "[{pid}] Halting from normal operation...");
-                $exitCode = 0;
-                break;
-
-            case self::APP_EXIT_RESTART:
-                $this->log(LogLevel::DEBUG, "[{pid}] Gracefully exiting (cron restart)...");
-                $exitCode = 2;
-                break;
-
-            case self::APP_EXIT_RELOAD:
-            default:
-                $this->log(LogLevel::DEBUG, "[{pid}] Preparing to reload...");
-                $exitCode = 1;
-                break;
-        }
-        return $exitCode;
-    }
-
-    /**
      * Catch signals
      *
      * @param int $signal
@@ -823,7 +933,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                             $this->instance->shutdown();
                         }
                     }
-                    $this->genocide();
+                    $this->reapAllChildren();
                     throw new Exception("Shutdown", 200);
                 }
                 break;
@@ -835,7 +945,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         $status = null;
                         $pid = pcntl_wait($status, WNOHANG);
                         if ($pid > 0) {
-                            $this->land($pid, $status);
+                            $this->reapChild($pid, $status);
                         }
                     } while ($pid > 0);
 
@@ -856,21 +966,12 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     }
 
     /**
-     * How big is our fleet of workers right now?
-     *
-     * @return int
-     */
-    public function fleetSize(): int {
-        return sizeof($this->children);
-    }
-
-    /**
-     * Recover a fleet worker
+     * Reap a fleet worker
      *
      * @param int $pid
      * @param int $status
      */
-    protected function land(int $pid, int $status = null) {
+    protected function reapChild(int $pid, int $status = null) {
         // One of ours?
         if (array_key_exists($pid, $this->children)) {
 
@@ -883,17 +984,36 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
             $workerType = val($pid, $this->children);
             unset($this->children[$pid]);
-            $fleetSize = $this->fleetSize();
+            $fleetSize = $this->getFleetSize();
             $this->log(LogLevel::DEBUG, "[{pid}] Landing fleet '{$workerType}' with PID {$pid} ({$fleetSize} still in the air)");
         }
     }
 
     /**
-     * Kill all children and return
+     * Reap any available exited children
+     *
+     * @return int
+     */
+    public function reapZombies() {
+        $reaped = 0;
+        // Clean up any exited children
+        do {
+            $status = null;
+            $pid = pcntl_wait($status, WNOHANG);
+            if ($pid > 0) {
+                $this->reapChild($pid, $status);
+                $reaped++;
+            }
+        } while ($pid > 0);
+        return $reaped;
+    }
+
+    /**
+     * Force-reap all children and return
      *
      * @return bool
      */
-    protected function genocide(): bool {
+    protected function reapAllChildren(): bool {
         static $killing = false;
         if (!$killing) {
             $this->log(LogLevel::DEBUG, "[{pid}] Shutting down fleet operations...");
@@ -906,12 +1026,12 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             pcntl_signal_dispatch();
 
             // Wait for children to exit
-            while ($this->fleetSize()) {
+            while ($this->getFleetSize()) {
                 do {
                     $status = null;
                     $pid = pcntl_wait($status, WNOHANG);
                     if ($pid > 0) {
-                        $this->land($pid, $status);
+                        $this->reapChild($pid, $status);
                     }
                 } while ($pid > 0);
                 usleep(10000);
