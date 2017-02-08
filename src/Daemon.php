@@ -91,7 +91,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     protected $args;
 
     /**
-     * DI Container
+     * Dependency Injection Container
      * @var \Garden\Container\Container
      */
     protected $di;
@@ -239,7 +239,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 ->description('Install command symlink to /usr/bin');
 
         // Allow payload application to influence CLI
-        $this->preflightPayload();
+        $this->payloadExec('preflight');
 
         // Parse CLI
         $this->args = $this->cli->parse($arguments, true);
@@ -341,7 +341,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 // Daemonize
                 if ($sysDaemonize) {
 
-                    $realm = $this->fork('daemon', true);
+                    $realm = $this->fork('daemon', null, true);
                     $this->realm = $realm;
 
                     // Console returns 0
@@ -386,7 +386,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                  * gives it a chance to adjust logging, inspect command line
                  * arguments, etc.
                  */
-                $this->initializePayload();
+                $this->payloadExec('initialize');
 
                 /*
                  * Run the payload
@@ -412,7 +412,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 }
 
                 // Dismiss payload
-                $this->dismissPayload();
+                $this->payloadExec('dismiss');
 
                 // Pipe exit code to wrapper file
                 $exitCode = $this->exit;
@@ -423,9 +423,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $exitHandled = null;
 
                 // Hand off control to app
-                if (method_exists($this->getPayloadInstance(), 'cli')) {
-                    $exitHandled = $this->di->call([$this->getPayloadInstance(), 'cli'], [$this->args]);
-                }
+                $this->payloadExec('cli', [$this->args]);
 
                 // Command not handled by app
                 if (is_null($exitHandled)) {
@@ -473,82 +471,18 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     }
 
     /**
-     * Runtime environment config for payload
+     * Execute callback on payload
      *
-     * Allow payload application to influence CLI arguments, and read from the
-     * config.
-     *
-     * @internal PRE FORK
+     * @param string $method
+     * @param mixed $args
+     * @return mixed
      */
-    protected function preflightPayload() {
+    protected function payloadExec($method, $args = null) {
         $this->getPayloadInstance();
-
-        if (method_exists($this->instance, 'preflight')) {
-            $this->di->call([$this->instance, 'preflight']);
+        if (method_exists($this->instance, $method)) {
+            return $this->di->call([$this->instance, $method], $args);
         }
-    }
-
-    /**
-     * Initialize payload
-     *
-     * Just prior to forking the fleet (or single process), initialize the
-     * payload.
-     *
-     * @internal POST FORK, PRE LOITER
-     */
-    protected function initializePayload() {
-        $this->getPayloadInstance();
-
-        if (method_exists($this->instance, 'initialize')) {
-            $this->di->call([$this->instance, 'initialize']);
-        }
-    }
-
-    /**
-     * Dismiss payload
-     *
-     * @internal POST LOITER
-     */
-    protected function dismissPayload() {
-        $this->getPayloadInstance();
-
-        if (method_exists($this->instance, 'dismiss')) {
-            $this->di->call([$this->instance, 'dismiss']);
-        }
-    }
-
-    /**
-     * Request launch override permission
-     *
-     * We use this to allow the payload application to spawn workers even when the fleet
-     * is fully allocated. This can be used to perform queue maintenance.
-     *
-     * @return bool
-     */
-    protected function getLaunchOverride() {
-        $this->getPayloadInstance();
-
-        $launchOverride = false;
-        if (method_exists($this->instance, 'getLaunchOverride')) {
-            $launchOverride = $this->di->call([$this->instance, 'getLaunchOverride']);
-        }
-        return $launchOverride;
-    }
-
-    /**
-     * Get worker config
-     *
-     * @internal MID LOITER
-     * @return array|bool
-     */
-    protected function getWorkerConfig() {
-        $this->getPayloadInstance();
-
-        $workerConfig = true;
-        if (method_exists($this->instance, 'getWorkerConfig')) {
-            $workerConfig = $this->di->call([$this->instance, 'getWorkerConfig']);
-        }
-        return $workerConfig;
+        return null;
     }
 
     /**
@@ -594,11 +528,11 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 do {
 
                     // Break from launch loop if we've hit max fleet size and there's no launch override
-                    if ($this->getFleetSize() >= $this->getMaxFleetSize() && !$this->launchOverride()) {
+                    if ($this->getFleetSize() >= $this->getMaxFleetSize() && !$this->payloadExec('getLaunchOverride')) {
                         break;
                     }
 
-                    $launched = $this->launchFleetWorker();
+                    $launched = $this->launchWorker();
 
                     // If a child gets through, terminate as a failure
                     if ($this->realm != 'daemon') {
@@ -648,18 +582,11 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     }
 
     /**
-     * Allow payload application to override launch
-     */
-    public function launchOverride() {
-
-    }
-
-    /**
      * Get launching flag
      *
      * @return bool
      */
-    public function getIsLaunching() {
+    public function getIsLaunching(): bool {
         return $this->get('launching', true);
     }
 
@@ -669,7 +596,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @param bool $launching
      * @return bool
      */
-    public function setIsLaunching(bool $launching) {
+    public function setIsLaunching(bool $launching): bool {
         return $this->set('launching', $launching);
     }
 
@@ -678,7 +605,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @return int
      */
-    public function getMaxFleetSize() {
+    public function getMaxFleetSize(): int {
         return $this->get('fleet', 1);
     }
 
@@ -688,7 +615,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @param int $fleet
      * @return int
      */
-    public function setMaxFleetSize(int $fleet) {
+    public function setMaxFleetSize(int $fleet): int {
         return $this->set('fleet', $fleet);
     }
 
@@ -706,16 +633,16 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      *
      * @return bool
      */
-    protected function launchFleetWorker(): bool {
+    protected function launchWorker(): bool {
         $this->log(LogLevel::DEBUG, "[{pid}]   launching fleet worker");
 
         // Prepare current state prior to forking
-        $workerConfig = $this->getWorkerConfig();
+        $workerConfig = $this->payloadExec('getWorkerConfig');
         if ($workerConfig === false) {
             return false;
         }
 
-        $this->fork('fleet');
+        $this->fork('fleet', $workerConfig);
 
         // Return daemon thread
         if ($this->realm != 'worker') {
@@ -791,9 +718,10 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * Fork into the background
      *
      * @param string $mode return realm label provider
+     * @param array $workerConfig optional.
      * @param bool $lock optional. false gives no lock protection, true re-locks on $this->lock
      */
-    protected function fork(string $mode, bool $lock = false) {
+    protected function fork(string $mode, array $workerConfig = null, bool $lock = false) {
 
         $modes = [
             'daemon' => [
@@ -812,7 +740,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         // Fork
         $pid = pcntl_fork();
 
-        // Realm splitting
         if ($pid > 0) {
 
             $realm = val('parent', $modes[$mode]);
@@ -823,6 +750,9 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             // Record child PID
             $childRealm = val('child', $modes[$mode]);
             $this->children[$pid] = $childRealm;
+
+            // Inform payload of new child
+            $this->payloadExec('spawnedWorker', [$realm, $pid, $workerConfig]);
 
             // Return as parent
             return $realm;
@@ -984,6 +914,10 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
             $workerType = val($pid, $this->children);
             unset($this->children[$pid]);
+
+            // Inform payload of reaped child
+            $this->payloadExec('reapedWorker', [$pid, $workerType]);
+
             $fleetSize = $this->getFleetSize();
             $this->log(LogLevel::DEBUG, "[{pid}] Landing fleet '{$workerType}' with PID {$pid} ({$fleetSize} still in the air)");
         }
