@@ -21,7 +21,7 @@ interface AppInterface {
      * @param \Garden\Cli\Cli $cli
      * @param \Kaecyra\AppCommon\Config $config
      */
-    public function preflight(\Garden\Cli\Cli $cli, \Kaecyra\AppCommon\Config $config);
+    public function preflight(\Garden\Cli\Cli $cli, \Interop\Container\ContainerInterface $config);
 
     /**
      * The first thing we run after forking into our daemon process
