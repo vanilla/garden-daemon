@@ -18,10 +18,8 @@ interface AppInterface {
     /**
      * Run just before parsing the CLI
      *
-     * @param \Garden\Cli\Cli $cli
-     * @param \Kaecyra\AppCommon\Config $config
      */
-    public function preflight(\Garden\Cli\Cli $cli, \Interop\Container\ContainerInterface $config);
+    public function preflight();
 
     /**
      * The first thing we run after forking into our daemon process
@@ -33,7 +31,8 @@ interface AppInterface {
     /**
      * Main app scope
      *
+     * @param array $config
      */
-    public function run();
+    public function run($config);
 
 }

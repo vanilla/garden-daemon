@@ -477,7 +477,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @param mixed $args
      * @return mixed
      */
-    protected function payloadExec($method, $args = null) {
+    protected function payloadExec($method, $args = []) {
         $this->getPayloadInstance();
         if (method_exists($this->instance, $method)) {
             return $this->di->call([$this->instance, $method], $args);
@@ -552,7 +552,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                     if (!$launched) {
                         if ($launched === false) {
-                            $this->log(LogLevel::WARN, "[{pid}] Failed to launch worker, moving on to cleanup");
+                            $this->log(LogLevel::WARNING, "[{pid}] Failed to launch worker, moving on to cleanup");
                         }
                     }
                 } while ($launched && $this->getFleetSize() < $this->getMaxFleetSize());
@@ -639,6 +639,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         // Prepare current state prior to forking
         $workerConfig = $this->payloadExec('getWorkerConfig');
         if ($workerConfig === false) {
+            $this->log(LogLevel::DEBUG, "[{pid}]    launch cancelled by payload");
             return false;
         }
 
