@@ -127,6 +127,11 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $this->cli = $cli;
         $this->di = $di;
         $this->options = array_merge($options, $config);
+
+        // Error handler
+
+        $errorHandler = $this->di->get(ErrorHandler::class);
+        set_error_handler([$errorHandler, 'error']);
     }
 
     /**

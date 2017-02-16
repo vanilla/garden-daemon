@@ -17,7 +17,7 @@ class ErrorException extends \ErrorException {
 
     protected $_context;
 
-    public function __construct($message, $errorNumber, $file, $line, $context, $backtrace) {
+    public function __construct($message, $errorNumber, $file, $line, $context, $backtrace = null) {
         parent::__construct($message, $errorNumber, 0, $file, $line, null);
         $this->_context = $context;
     }
