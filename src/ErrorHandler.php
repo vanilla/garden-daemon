@@ -42,12 +42,12 @@ class ErrorHandler implements ErrorHandlerInterface {
      * Add an error handler
      *
      * @param \Garden\Daemon\callable $handler
-     * @param int $errorLevel
+     * @param int $errorMask
      */
-    public function addHandler(\Callable $handler, $errorLevel = E_ALL | E_STRICT) {
+    public function addHandler(callable $handler, $errorMask = E_ALL | E_STRICT) {
         $this->handlers[] = [
             'handler'       => $handler,
-            'error_level'   => $errorLevel
+            'error_mask'    => $errorMask
         ];
     }
 
@@ -56,7 +56,7 @@ class ErrorHandler implements ErrorHandlerInterface {
      *
      * @param \Callable $handler
      */
-    public function removerHandler(\Callable $handler) {
+    public function removerHandler(callable $handler) {
         foreach ($this->handlers as $i => $oldHandler) {
             if ($handler == $oldHandler['handler']) {
                 unset($this->handlers[$i]);
@@ -77,8 +77,8 @@ class ErrorHandler implements ErrorHandlerInterface {
         if (count($this->handlers)) {
 
             foreach ($this->handlers as $handler) {
-                $handlerLevel = $handler['error_level'];
-                $errorEnabled = (bool)($handlerLevel & $errorNumber);
+                $handlerMask = $handler['error_mask'];
+                $errorEnabled = (bool)($handlerMask & $errorNumber);
                 if ($errorEnabled) {
                     $continue = $this->di->call($handler['handler'], [$errorNumber, $message, $file, $line, $context]);
                     if ($continue === false) {

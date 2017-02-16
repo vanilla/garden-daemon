@@ -17,12 +17,13 @@ interface ErrorHandlerInterface {
 
     /**
      * Error handling callback
-     * 
+     *
      * @param int $errorNumber
      * @param string $message
      * @param string $file
      * @param int $line
+     * @param array $context
      */
-    public function error($errorNumber, $message, $file, $line);
+    public function error($errorNumber, $message, $file, $line, $context);
 
 }

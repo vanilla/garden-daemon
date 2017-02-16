@@ -128,7 +128,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $this->di = $di;
         $this->options = array_merge($options, $config);
 
-        // Error handler
+        // Set error handler
 
         $errorHandler = $this->di->get(ErrorHandler::class);
         set_error_handler([$errorHandler, 'error']);
@@ -272,6 +272,18 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $runPid = $this->lock->getRunningPID();
                 $isRunning = $this->lock->isLocked();
 
+                // Log desired action
+                $this->getLogger()->enableLogger('persist');
+
+                if ($command == 'restart') {
+                    $this->log(LogLevel::WARNING, 'restarting...');
+                } else {
+                    $this->log(LogLevel::NOTICE, 'stopping...');
+                    if (!$isRunning) {
+                        $this->log(LogLevel::WARNING, 'not running!');
+                    }
+                }
+
                 if ($isRunning) {
 
                     // Stop it
@@ -294,14 +306,13 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 }
 
                 if ($command == 'stop') {
-                    $message = 'stopped';
                     if (!$isRunning) {
-                        $message = 'not running';
+                        exit(1);
                     }
-                    throw new Exception(" - {$message}", 500);
-                } else {
-                    $this->log(LogLevel::WARNING, 'restarting...');
+                    exit(0);
                 }
+
+                // 'restart' flows through to 'start'
 
             // Start daemon
             case 'start':
@@ -392,6 +403,10 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                  * arguments, etc.
                  */
                 $this->payloadExec('initialize');
+
+                $this->attachPayloadErrorHandler();
+
+                $this->log(LogLevel::NOTICE, "Running");
 
                 /*
                  * Run the payload
@@ -488,6 +503,16 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             return $this->di->call([$this->instance, $method], $args);
         }
         return null;
+    }
+
+    /**
+     * Attach payload error handler
+     */
+    protected function attachPayloadErrorHandler() {
+        $this->getPayloadInstance();
+        if (method_exists($this->instance, 'error')) {
+            $this->di->get(ErrorHandler::class)->addHandler([$this->instance, 'error']);
+        }
     }
 
     /**
