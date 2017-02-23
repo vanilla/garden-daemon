@@ -510,8 +510,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      */
     protected function attachPayloadErrorHandler() {
         $this->getPayloadInstance();
-        if (method_exists($this->instance, 'error')) {
-            $this->di->get(ErrorHandler::class)->addHandler([$this->instance, 'error']);
+        if (method_exists($this->instance, 'errorHandler')) {
+            $this->di->get(ErrorHandler::class)->addHandler([$this->instance, 'errorHandler']);
         }
     }
 
