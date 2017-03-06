@@ -108,7 +108,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      */
     protected $config;
 
-    public $logLevel = -1;
     protected $exitMode = 'success';
     protected $exit = 0;
 
@@ -212,10 +211,6 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
         $appName = $this->get('appname');
         $appDescription = $this->get('appdescription');
-
-        // Logging
-
-        $this->logLevel = $this->get('loglevel', LogLevel::WARNING);
 
         // Set up app
 
@@ -1058,22 +1053,18 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             'time' => Daemon::time('now')->format('Y-m-d H:i:s')
         ], $context);
 
-        $loggingPriority = $this->levelPriority($this->logLevel);
-
-        if ($this->logLevel == -1 || ($loggingPriority && $loggingPriority >= $priority)) {
-            if ($options & Daemon::LOG_O_SHOWTIME) {
-                $format .= "[{time}]";
-            }
-
-            // Pad output if there are tags
-            if (strlen($format)) {
-                $format .= " ";
-            }
-
-            $format .= $message;
-
-            $this->getLogger()->log($level, $format, $context);
+        if ($options & Daemon::LOG_O_SHOWTIME) {
+            $format .= "[{time}]";
         }
+
+        // Pad output if there are tags
+        if (strlen($format)) {
+            $format .= " ";
+        }
+
+        $format .= $message;
+
+        $this->getLogger()->log($level, $format, $context);
     }
 
     /**
