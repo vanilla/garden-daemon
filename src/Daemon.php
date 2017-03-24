@@ -131,6 +131,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
         $errorHandler = $this->di->get(ErrorHandler::class);
         set_error_handler([$errorHandler, 'error']);
+        set_exception_handler([$errorHandler, 'exception']);
     }
 
     /**
@@ -778,7 +779,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             $this->children[$pid] = $childRealm;
 
             // Inform payload of new child
-            $this->payloadExec('spawnedWorker', [$realm, $pid, $workerConfig]);
+            $this->payloadExec('spawnedWorker', [$pid, $realm, $workerConfig]);
 
             // Return as parent
             return $realm;

@@ -74,31 +74,38 @@ class ErrorHandler implements ErrorHandlerInterface {
      * @param array $context
      */
     public function error($errorNumber, $message, $file, $line, $context) {
+        $errorReporting = error_reporting();
+        $errorEnabled = (bool)($errorReporting & $errorNumber);
+
+        // Ignore errors that are below the current error reporting level.
+        if (!$errorEnabled) {
+            return false;
+        }
+
+        $backtrace = debug_backtrace();
+        throw new ErrorException($message, $errorNumber, $file, $line, $context, $backtrace);
+    }
+
+    /**
+     * Handle exception
+     *
+     * @param \Throwable $exception
+     */
+    public function exception(\Throwable $exception) {
         if (count($this->handlers)) {
 
             foreach ($this->handlers as $handler) {
                 $handlerMask = $handler['error_mask'];
-                $errorEnabled = (bool)($handlerMask & $errorNumber);
+                $errorEnabled = $exception->getCode() === 0 || (bool)($handlerMask & $exception->getCode());
                 if ($errorEnabled) {
-                    $continue = $this->di->call($handler['handler'], [$errorNumber, $message, $file, $line, $context]);
+                    $context = method_exists($exception, 'getContext') ? $exception->getContext() : [];
+                    $continue = $this->di->call($handler['handler'], [$exception->getCode(), $exception->getMessage(), $exception->getFile(), $exception->getLine(), $context]);
                     if ($continue === false) {
                         break;
                     }
                 }
             }
 
-        } else {
-
-            $errorReporting = error_reporting();
-            $errorEnabled = (bool)($errorReporting & $errorNumber);
-
-            // Ignore errors that are below the current error reporting level.
-            if (!$errorEnabled) {
-                return false;
-            }
-
-            $backtrace = debug_backtrace();
-            throw new ErrorException($message, $errorNumber, $file, $line, $context, $backtrace);
         }
     }
 
