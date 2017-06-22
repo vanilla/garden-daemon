@@ -8,7 +8,6 @@
 namespace Garden\Daemon;
 
 use Garden\Cli\Cli;
-use Garden\Container\Container;
 
 use Psr\Log\LogLevel;
 use Psr\Log\NullLogger;
@@ -16,7 +15,7 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 
-use Interop\Container\ContainerInterface;
+use Psr\Container\ContainerInterface;
 
 /**
  * Daemon manager
@@ -92,7 +91,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
     /**
      * Dependency Injection Container
-     * @var \Garden\Container\Container
+     * @var \Psr\Container\ContainerInterface
      */
     protected $di;
 
@@ -116,7 +115,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      */
     const LOG_O_SHOWTIME = 1;
 
-    public function __construct(Cli $cli, Container $di, array $options, array $config) {
+    public function __construct(Cli $cli, ContainerInterface $di, array $options, array $config) {
         $this->parentPid = posix_getpid();
         $this->daemonPid = null;
         $this->childPid = null;
