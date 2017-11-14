@@ -235,8 +235,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             ->command('restart')
                 ->description('Stop the application, then start it again.')
 
-            ->command('install')
-                ->description('Install command symlink to /usr/bin');
+            ->command('status')
+                ->description('Check application running status');
 
         // Allow payload application to influence CLI
         $this->payloadExec('preflight');
@@ -255,8 +255,18 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $exitCode = null;
         switch ($command) {
 
-            // Install symlink
-            case 'install':
+            // Checking running status
+            case 'status':
+                // Check if pid file is currently running
+                $isRunning = $this->lock->isLocked();
+
+                if ($isRunning) {
+                    $this->log(LogLevel::NOTICE, 'running');
+                    exit(0);
+                } else {
+                    $this->log(LogLevel::NOTICE, 'not running');
+                    exit(1);
+                }
                 break;
 
             // Stop or restart daemon
