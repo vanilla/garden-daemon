@@ -187,7 +187,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * Attach to process
      *
      * @param array $arguments
-     * @return void
+     * @return int
      * @throws DaemonException
      */
     public function attach(array $arguments = null): int {
@@ -203,7 +203,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         $appName = $this->get('appname');
 
         $appID = strtolower($appName);
-        $runFile = paths('/var/run', "{$appID}.pid");
+        $runFile = $this->get('pidfile') ?? paths('/var/run', "{$appID}.pid");
 
         $this->lock = new Lock($runFile);
 
@@ -262,10 +262,10 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
                 if ($isRunning) {
                     $this->log(LogLevel::NOTICE, 'running');
-                    exit(0);
+                    return 0;
                 } else {
                     $this->log(LogLevel::NOTICE, 'not running');
-                    exit(1);
+                    return 1;
                 }
                 break;
 
@@ -310,11 +310,16 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                     }
                 }
 
+                // Remove PID file
+                if (!$isRunning) {
+                    $this->lock->unlock();
+                }
+
                 if ($command == 'stop') {
                     if (!$isRunning) {
-                        exit(1);
+                        return 1;
                     }
-                    exit(0);
+                    return 0;
                 }
 
                 // 'restart' flows through to 'start'
