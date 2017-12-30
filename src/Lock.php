@@ -33,6 +33,10 @@ class Lock {
         }
 
         $myPid = $pid ?? getmypid();
+        $pidDir = dirname($this->pidFile);
+        if (!is_dir($pidDir)) {
+            @mkdir($pidDir, 0744, true);
+        }
         file_put_contents($this->pidFile, $myPid);
         return true;
     }
