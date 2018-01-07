@@ -891,7 +891,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             // Daemon was asked to restart
             case SIGHUP:
                 if ($this->realm == 'daemon') {
-                    $handled = $this->payloadExec('sighup');
+                    $handled = $this->payloadExec('signal', [SIGHUP]);
                     if (!$handled) {
                         throw new Exception("Restart", 100);
                     }
@@ -908,7 +908,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                         }
                     }
                     $this->reapAllChildren();
-                    $this->payloadExec('sigterm');
+                    $this->payloadExec('signal', [$signal]);
                     throw new Exception("Shutdown", 200);
                 }
                 break;
