@@ -976,7 +976,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
      * @throws Exception
      */
     public function workerSignal(int $signal) {
-        $this->log(LogLevel::INFO, "[{pid}] Caught signal '{$signal}' (SIGHUP) at worker - handing off to payload handler");
+        $this->log(LogLevel::DEBUG, "[{pid}] Caught signal '{$signal}' (SIGHUP) at worker - handing off to payload handler");
 
         switch ($signal) {
 
