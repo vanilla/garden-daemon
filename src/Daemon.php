@@ -475,10 +475,12 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         declare (ticks = 100);
 
         // Install signal handlers
-        pcntl_signal(SIGHUP, array($this, 'handleSignal'));
-        pcntl_signal(SIGINT, array($this, 'handleSignal'));
-        pcntl_signal(SIGTERM, array($this, 'handleSignal'));
-        pcntl_signal(SIGCHLD, array($this, 'handleSignal'));
+        pcntl_signal(SIGHUP, [$this, 'handleSignal']);
+        pcntl_signal(SIGINT, [$this, 'handleSignal']);
+        pcntl_signal(SIGTERM, [$this, 'handleSignal']);
+        pcntl_signal(SIGCHLD, [$this, 'handleSignal']);
+        pcntl_signal(SIGUSR1, [$this, 'handleSignal']);
+        pcntl_signal(SIGUSR2, [$this, 'handleSignal']);
     }
 
     /**
@@ -621,6 +623,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
         pcntl_signal(SIGINT, SIG_DFL);
         pcntl_signal(SIGTERM, SIG_DFL);
         pcntl_signal(SIGCHLD, SIG_DFL);
+        pcntl_signal(SIGUSR1, SIG_DFL);
+        pcntl_signal(SIGUSR2, SIG_DFL);
     }
 
     /**
@@ -698,11 +702,15 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
          *
          */
 
-        // Workers don't care about signal handling
-        pcntl_signal(SIGHUP, SIG_DFL);
+        // Unhandle SIGINT, SIGTERM, SIGCHLD
         pcntl_signal(SIGINT, SIG_DFL);
         pcntl_signal(SIGTERM, SIG_DFL);
         pcntl_signal(SIGCHLD, SIG_DFL);
+
+        // Move handling of SIGHUP, SIGUSR1, SIGUSR2 to workerSignal()
+        pcntl_signal(SIGHUP, [$this, 'workerSignal']);
+        pcntl_signal(SIGUSR1, [$this, 'workerSignal']);
+        pcntl_signal(SIGUSR2, [$this, 'workerSignal']);
 
         $exitCode = $this->runPayloadApplication($workerConfig);
         exit($exitCode);
@@ -910,7 +918,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
             // Daemon was asked to hang up
             case SIGHUP:
                 if ($this->realm == 'daemon') {
-                    $handled = $this->payloadExec('signal', [SIGHUP]);
+                    $handled = $this->payloadExec('signal', [$signal]);
                     if (!$handled) {
                         throw new Exception("Restart", 100);
                     }
@@ -951,10 +959,40 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
 
             // Custom signal - Nothing
             case SIGUSR1:
+                $this->payloadExec('signal', [$signal]);
                 break;
 
             // Custom signal - Nothing
             case SIGUSR2:
+                $this->payloadExec('signal', [$signal]);
+                break;
+        }
+    }
+
+    /**
+     * Worker signal handler
+     *
+     * @param int $signal
+     * @throws Exception
+     */
+    public function workerSignal(int $signal) {
+        $this->log(LogLevel::INFO, "[{pid}] Caught signal '{$signal}' (SIGHUP) at worker - handing off to payload handler");
+
+        switch ($signal) {
+
+            // Daemon was asked to hang up
+            case SIGHUP:
+                $this->payloadExec('signal', [$signal]);
+                break;
+
+            // Custom signal - Nothing
+            case SIGUSR1:
+                $this->payloadExec('signal', [$signal]);
+                break;
+
+            // Custom signal - Nothing
+            case SIGUSR2:
+                $this->payloadExec('signal', [$signal]);
                 break;
         }
     }
