@@ -459,6 +459,8 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 if (is_null($exitHandled)) {
                     throw new Exception("Unhandled command", 400);
                 }
+
+                $exitCode = (int)$exitHandled;
                 break;
         }
 
