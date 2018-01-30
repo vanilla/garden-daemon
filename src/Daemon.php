@@ -453,7 +453,7 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
                 $exitHandled = null;
 
                 // Hand off control to app
-                $this->payloadExec('cli', [$this->args]);
+                $exitHandled = $this->payloadExec('cli', [$this->args]);
 
                 // Command not handled by app
                 if (is_null($exitHandled)) {
@@ -879,16 +879,33 @@ class Daemon implements ContainerInterface, LoggerAwareInterface {
     }
 
     /**
+     * Send a signal to the running daemon
+     *
+     * @param int $signal
+     * @return bool
+     */
+    public function sendSignal(int $signal) {
+        $runningPid = $this->lock->getRunningPID();
+        if (!$runningPid) {
+            return false;
+        }
+
+        // Send signal
+        return posix_kill($runningPid, $signal);
+    }
+
+    /**
      * Catch signals
      *
      * @param int $signal
+     * @throws Exception
      */
     public function handleSignal(int $signal) {
         $this->log(LogLevel::DEBUG, "[{pid}] Caught signal '{$signal}'");
 
         switch ($signal) {
 
-            // Daemon was asked to restart
+            // Daemon was asked to hang up
             case SIGHUP:
                 if ($this->realm == 'daemon') {
                     $handled = $this->payloadExec('signal', [SIGHUP]);
