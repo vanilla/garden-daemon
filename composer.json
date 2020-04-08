@@ -10,7 +10,7 @@
     ],
     "require": {
         "php": ">=7.0",
-        "vanilla/garden-cli": "^1.6",
+        "vanilla/garden-cli": "^2.2",
         "psr/log": "~1.0",
         "psr/container": "^1.0"
     },
@@ -20,3 +20,4 @@
         }
     }
 }
+
